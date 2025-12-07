@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Labyrinth Game</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; }
+        canvas { display: block; }
+        #instructions {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0,0,0,0.5);
+            color: white;
+            flex-direction: column;
+            cursor: pointer;
+            z-index: 10;
+        }
+        #instructions p { font-size: 24px; }
+    </style>
+    <!-- Use specific three.js version as requested -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+</head>
+<body>
+    <div id="instructions">
+        <p>Click to Play</p>
+        <p>WASD to Move, Mouse to Look</p>
+    </div>
+    <script>
+        // --- 1. Constants & Globals ---
+        const MAP_STRING = `
+XXXXXXXXXX
+Xs.....XXX
+XXXXXX.XXX
+XXXXXX.XXX
+XXX......X
+X.X......X
+X.X......X
+X.XX.XXX.X
+X........X
+XXXXXXXXXX
+`.trim();
+
+        const BLOCK_SIZE = 1;
+        const PLAYER_HEIGHT = 1.7;
+        const PLAYER_SPEED = 5.0;
+        const PLAYER_RADIUS = 0.3;
+        // Mouse sensitivity (radians per pixel)
+        const SENSITIVITY = 0.002; 
+        
+        // Colors
+        const WALL_COLOR = 0x888888;
+        const GROUND_COLOR = 0x222222;
+        const SKY_COLOR = 0x87CEEB;
+
+        // Three.js Core
+        let camera, scene, renderer;
+        let lastTime = performance.now();
+        
+        // Input State
+        const moveState = { forward: false, backward: false, left: false, right: false };
+        let isLocked = false;
+        
+        // Map Data Structure
+        const mapGrid = [];
+        let mapWidth = 0;
+        let mapHeight = 0;
+        const walls = []; // Array of bounding boxes for simple collision logic if needed, or just use grid
+        
+        // --- 2. Initialization ---
+        function init() {
+            const container = document.body;
+
+            // -- Scene --
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(SKY_COLOR);
+            scene.fog = new THREE.Fog(SKY_COLOR, 0, 20);
+
+            // -- Camera --
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            // Height is handled by position.y
+            
+            // -- Renderer --
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            container.appendChild(renderer.domElement);
+
+            // -- Lights --
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 10, 7);
+            scene.add(dirLight);
+
+            // -- Parse Map & Build World --
+            parseMap();
+
+            // -- Events --
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            document.addEventListener('mousemove', onMouseMove);
+            window.addEventListener('resize', onWindowResize);
+            
+            const instructions = document.getElementById('instructions');
+            instructions.addEventListener('click', () => {
+                document.body.requestPointerLock();
+            });
+
+            document.addEventListener('pointerlockchange', () => {
+                if (document.pointerLockElement === document.body) {
+                    isLocked = true;
+                    instructions.style.display = 'none';
+                } else {
+                    isLocked = false;
+                    instructions.style.display = 'flex';
+                }
+            });
+
+            // -- Start Loop --
+            animate();
+        }
+
+        function parseMap() {
+            const rows = MAP_STRING.split('\n');
+            mapHeight = rows.length;
+            mapWidth = rows[0].length; // Assuming rectangular
+
+            // Geometries & Materials reuse
+            const boxGeo = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+            const wallMat = new THREE.MeshStandardMaterial({ color: WALL_COLOR });
+            
+            // Floor
+            const floorGeo = new THREE.PlaneGeometry(mapWidth * BLOCK_SIZE, mapHeight * BLOCK_SIZE);
+            const floorMat = new THREE.MeshStandardMaterial({ color: GROUND_COLOR, side: THREE.DoubleSide });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = - Math.PI / 2;
+            floor.position.set((mapWidth * BLOCK_SIZE) / 2, 0, (mapHeight * BLOCK_SIZE) / 2); // Center floor
+            scene.add(floor);
+
+            for (let z = 0; z < mapHeight; z++) {
+                const row = rows[z];
+                const gridRow = [];
+                for (let x = 0; x < mapWidth; x++) {
+                    const char = row[x];
+                    
+                    // Populate Grid: true for wall, false for empty
+                    let isWall = false;
+
+                    const posX = x * BLOCK_SIZE + BLOCK_SIZE / 2;
+                    const posZ = z * BLOCK_SIZE + BLOCK_SIZE / 2;
+
+                    if (char === 'X') {
+                        isWall = true;
+                        const wall = new THREE.Mesh(boxGeo, wallMat);
+                        // Wall sits on ground (y=0), so center is at y=0.5
+                        wall.position.set(posX, BLOCK_SIZE / 2, posZ); 
+                        scene.add(wall);
+                    } else if (char === 's') {
+                        // Start position
+                        camera.position.set(posX, PLAYER_HEIGHT, posZ);
+                        camera.rotation.set(0, 0, 0); // Reset rotation
+                    }
+
+                    gridRow.push(isWall);
+                }
+                mapGrid.push(gridRow);
+            }
+        }
+
+        // --- 3. Input Handling ---
+        function onKeyDown(event) {
+            switch (event.code) {
+                case 'KeyW': moveState.forward = true; break;
+                case 'KeyS': moveState.backward = true; break;
+                case 'KeyA': moveState.left = true; break;
+                case 'KeyD': moveState.right = true; break;
+            }
+        }
+
+        function onKeyUp(event) {
+            switch (event.code) {
+                case 'KeyW': moveState.forward = false; break;
+                case 'KeyS': moveState.backward = false; break;
+                case 'KeyA': moveState.left = false; break;
+                case 'KeyD': moveState.right = false; break;
+            }
+        }
+
+        function onMouseMove(event) {
+            if (!isLocked) return;
+            
+            // Look left/right (Rotate around Y axis)
+            camera.rotation.y -= event.movementX * SENSITIVITY;
+
+            // Look up/down (Rotate around X axis)
+            // Pull mouse down (positive movementY) -> Look down (negative rotation X)
+            // Push mouse up (negative movementY) -> Look up (positive rotation X)
+            camera.rotation.x -= event.movementY * SENSITIVITY;
+
+            // Clamp vertical rotation to avoid flipping (approx +/- 90 degrees)
+            const MAX_LOOK = Math.PI / 2 - 0.01;
+            camera.rotation.x = Math.max(-MAX_LOOK, Math.min(MAX_LOOK, camera.rotation.x));
+            
+            // Ensure Rotation Order is suitable (default is 'XYZ', usually fine, but YXZ is better for FPS)
+            camera.rotation.order = "YXZ"; 
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // --- 4. Game Logic & Collision ---
+        function checkCollision(x, z) {
+            // Convert world coords to grid coords
+            // NOTE: World (x, z) corresponds to grid indices. 
+            // x in [0, 1] is col 0.
+            
+            // Need to check a radius around the player
+            // We check 4 corners of the player's bounding square
+            
+            const radius = PLAYER_RADIUS;
+            const corners = [
+                {x: x - radius, z: z - radius},
+                {x: x + radius, z: z - radius},
+                {x: x - radius, z: z + radius},
+                {x: x + radius, z: z + radius}
+            ];
+
+            for (let p of corners) {
+                const gridX = Math.floor(p.x / BLOCK_SIZE);
+                const gridZ = Math.floor(p.z / BLOCK_SIZE);
+
+                // Check bounds
+                if (gridZ < 0 || gridZ >= mapHeight || gridX < 0 || gridX >= mapWidth) {
+                    return true; // Out of bounds is strict collision
+                }
+
+                if (mapGrid[gridZ][gridX]) {
+                    return true; // Hit a wall
+                }
+            }
+            return false;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (isLocked) {
+                const time = performance.now();
+                const delta = (time - lastTime) / 1000;
+                
+                // Movement Direction relative to camera
+                const direction = new THREE.Vector3();
+                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+                forward.y = 0; // Constraints to ground plane
+                forward.normalize();
+
+                const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+                right.y = 0;
+                right.normalize();
+
+                if (moveState.forward) direction.add(forward);
+                if (moveState.backward) direction.sub(forward);
+                if (moveState.right) direction.add(right);
+                if (moveState.left) direction.sub(right);
+
+                direction.normalize(); // Consistent speed in diagonals
+
+                if (direction.lengthSq() > 0) {
+                    const speed = PLAYER_SPEED * delta;
+                    const nextX = camera.position.x + direction.x * speed;
+                    const nextZ = camera.position.z + direction.z * speed;
+
+                    // Simple "Sliding" Collision: try X, then try Z independently
+                    
+                    // Try X movement
+                    if (!checkCollision(nextX, camera.position.z)) {
+                        camera.position.x = nextX;
+                    }
+
+                    // Try Z movement
+                    if (!checkCollision(camera.position.x, nextZ)) {
+                        camera.position.z = nextZ;
+                    }
+                }
+
+                lastTime = time;
+            } else {
+                lastTime = performance.now(); // Prevent large delta jump on resume
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // Start
+        init();
+
+    </script>
+</body>
+</html>

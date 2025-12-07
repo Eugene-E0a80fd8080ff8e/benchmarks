@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Labyrinth Game</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #111;
+            font-family: Arial, sans-serif;
+        }
+        #blocker {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+        }
+        #instructions {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #ffffff;
+            text-align: center;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="blocker">
+        <div id="instructions">
+            <p style="font-size:36px">Click to play</p>
+            <p>Move: W A S D</p>
+            <p>Look: Mouse</p>
+        </div>
+    </div>
+
+    <!-- Three.js from CDN as requested -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+
+    <script>
+        // --- Game Constants & Globals ---
+        const mapLayout = [
+            "XXXXXXXXXX",
+            "Xs.....XXX",
+            "XXXXXX.XXX",
+            "XXXXXX.XXX",
+            "XXX......X",
+            "X.X......X",
+            "X.X......X",
+            "X.XX.XXX.X",
+            "X........X",
+            "XXXXXXXXXX"
+        ];
+        
+        const BLOCK_SIZE = 1; // 1x1x1 meters
+        const PLAYER_HEIGHT = 1.7; // meters
+        const MOVEMENT_SPEED = 5.0; // meters per second
+        const PLAYER_RADIUS = 0.25; // collision radius
+
+        let camera, scene, renderer;
+        let moveForward = false;
+        let moveBackward = false;
+        let moveLeft = false;
+        let moveRight = false;
+        let prevTime = performance.now();
+        
+        // Pitch and Yaw objects for rotation
+        const pitchObject = new THREE.Object3D(); // Vertical look (Camera parent)
+        const yawObject = new THREE.Object3D();   // Horizontal turn (Player body)
+        
+        // Pointer Lock variables
+        const blocker = document.getElementById('blocker');
+        const instructions = document.getElementById('instructions');
+        let controlsEnabled = false;
+
+        // Collision Helper
+        const walls = []; // Store coordinates of walls [x, z]
+
+        init();
+        animate();
+
+        function init() {
+            // 1. Setup Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0xefd1b5); // Sky/fog color
+            scene.fog = new THREE.Fog(0xefd1b5, 0, 20);
+
+            // 2. Setup Camera and Player Rig
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 0, 0); // Local to pitchObject
+
+            // yawObject controls horizontal rotation (Y-axis)
+            // pitchObject controls vertical rotation (X-axis) and holds the camera
+            pitchObject.add(camera);
+            pitchObject.position.y = PLAYER_HEIGHT; 
+            yawObject.add(pitchObject);
+            scene.add(yawObject);
+
+            // 3. Parse Map and Create World
+            const wallGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+            const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x888888 });
+            
+            // Floor
+            const floorGeometry = new THREE.PlaneGeometry(20, 20);
+            const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x444444, side: THREE.DoubleSide });
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.set(5, 0, 5); // Center approx
+            scene.add(floor);
+
+            // Ceiling (optional, but makes it look more inside)
+            const ceiling = new THREE.Mesh(floorGeometry, new THREE.MeshBasicMaterial({ color: 0x222222 }));
+            ceiling.rotation.x = Math.PI / 2;
+            ceiling.position.set(5, 2, 5); // Just above walls? Or at wall height? 
+            // Walls are 1m high? Usually labyrinths are taller, but prompt says "blocks are 1x1x1 meters".
+            // If player is 1.7m, they can see over the walls (1m).
+            // This implies the walls are short, or we should stack them? 
+            // "Make a labyrinth game of cube blocks... Assume all blockes are 1x1x1 meters"
+            // "Assume player's height is 1.7 meters."
+            // If walls are only 1m, the player (1.7m) looks over them. That's fine, it's a "cube block" labyrinth.
+            // Let's stick to the prompt strictly: 1x1x1 blocks.
+            // But usually in games, walls block view. 
+            // If the prompt implies a standard maze where you can't see over, I might need to clarify or just assume 1 block high.
+            // Re-reading: "Make a labyrinth game of cube blocks."
+            // "Use this map... 'X' is a wall"
+            // "Assume all blockes are 1x1x1 meters"
+            // "Assume player's height is 1.7 meters."
+            // I will place walls at y=0.5 (centered on 0-1 range). 
+            // Player eyes are at 1.7. So yes, player looks over the walls. 
+            // However, often "cube blocks" implies the unit, maybe they are stacked? 
+            // The prompt doesn't say "stacked". It says "blocks are 1x1x1". 
+            // I will make them 1x1x1. If it looks weird, it matches variables.
+            // For better visuals, I'll add a second layer or just 1 layer. 
+            // Let's stick to 1 layer of 1x1x1 blocks as strictly requested. 
+            // Wait, if I'm looking down at the "ground" and up at the "ski" (sky?), 
+            // maybe "ski" implies open air.
+            // I will implement exactly 1x1x1 blocks.
+
+            const textureLoader = new THREE.TextureLoader();
+            // Using simple colors, no textures to keep it single file without external assets dependencies (other than three.js).
+            
+            for (let row = 0; row < mapLayout.length; row++) {
+                const line = mapLayout[row];
+                for (let col = 0; col < line.length; col++) {
+                    const char = line[col];
+                    const x = col * BLOCK_SIZE;
+                    const z = row * BLOCK_SIZE;
+
+                    if (char === 'X') {
+                        const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+                        // Pivot is center. Position center at (x, 0.5, z)
+                        wall.position.set(x, BLOCK_SIZE / 2, z);
+                        scene.add(wall);
+                        // Add to walls for collision
+                        // We store the integer grid coordinates for easy lookup or just AABB bounds
+                        walls.push({ minX: x - 0.5, maxX: x + 0.5, minZ: z - 0.5, maxZ: z + 0.5 });
+                    } else if (char === 's') {
+                        // Start position
+                        yawObject.position.set(x, 0, z);
+                    }
+                }
+            }
+
+            // 4. Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(5, 10, 7);
+            scene.add(dirLight);
+
+            // 5. Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // 6. Events
+            window.addEventListener('resize', onWindowResize, false);
+            document.addEventListener('keydown', onKeyDown, false);
+            document.addEventListener('keyup', onKeyUp, false);
+            
+            // Pointer Lock Setup
+            instructions.addEventListener('click', function() {
+                document.body.requestPointerLock();
+            });
+
+            document.addEventListener('pointerlockchange', function() {
+                if (document.pointerLockElement === document.body) {
+                    controlsEnabled = true;
+                    blocker.style.display = 'none';
+                } else {
+                    controlsEnabled = false;
+                    blocker.style.display = 'flex';
+                }
+            });
+
+            // Mouse Look
+            document.body.addEventListener('mousemove', function(event) {
+                if (!controlsEnabled) return;
+
+                const movementX = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
+                const movementY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
+
+                // Yaw (Y-axis rotation) - Left/Right
+                yawObject.rotation.y -= movementX * 0.002;
+
+                // Pitch (X-axis rotation) - Up/Down
+                pitchObject.rotation.x -= movementY * 0.002;
+
+                // Clamp Pitch to avoid flipping over (approx -90 to 90 degrees)
+                pitchObject.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitchObject.rotation.x));
+            });
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onKeyDown(event) {
+            switch (event.code) {
+                case 'ArrowUp':
+                case 'KeyW': moveForward = true; break;
+                case 'ArrowLeft':
+                case 'KeyA': moveLeft = true; break;
+                case 'ArrowDown':
+                case 'KeyS': moveBackward = true; break;
+                case 'ArrowRight':
+                case 'KeyD': moveRight = true; break;
+            }
+        }
+
+        function onKeyUp(event) {
+            switch (event.code) {
+                case 'ArrowUp':
+                case 'KeyW': moveForward = false; break;
+                case 'ArrowLeft':
+                case 'KeyA': moveLeft = false; break;
+                case 'ArrowDown':
+                case 'KeyS': moveBackward = false; break;
+                case 'ArrowRight':
+                case 'KeyD': moveRight = false; break;
+            }
+        }
+
+        function checkCollision(x, z) {
+            // Simple Circle vs AABB (Wall) check
+            // Or just check if position is inside any wall block + radius margin
+            
+            // Optimized: Determine which grid cell (col, row) we are in
+            // And check 3x3 neighbors
+            const centerCol = Math.round(x);
+            const centerRow = Math.round(z);
+
+            for (let r = centerRow - 1; r <= centerRow + 1; r++) {
+                for (let c = centerCol - 1; c <= centerCol + 1; c++) {
+                    // Check bounds
+                    if (r >= 0 && r < mapLayout.length && c >= 0 && c < mapLayout[0].length) {
+                        if (mapLayout[r][c] === 'X') {
+                            // Wall bounds
+                            const minX = c - 0.5;
+                            const maxX = c + 0.5;
+                            const minZ = r - 0.5;
+                            const maxZ = r + 0.5;
+
+                            // Closest point on AABB to circle center
+                            const closestX = Math.max(minX, Math.min(x, maxX));
+                            const closestZ = Math.max(minZ, Math.min(z, maxZ));
+
+                            const distanceX = x - closestX;
+                            const distanceZ = z - closestZ;
+
+                            const distanceSquared = (distanceX * distanceX) + (distanceZ * distanceZ);
+                            const radiusSquared = PLAYER_RADIUS * PLAYER_RADIUS;
+
+                            if (distanceSquared < radiusSquared) {
+                                return true; // Collision
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (controlsEnabled) {
+                const time = performance.now();
+                const delta = (time - prevTime) / 1000;
+
+                // 1. Calculate intended movement vector
+                const direction = new THREE.Vector3();
+                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(yawObject.quaternion);
+                const right = new THREE.Vector3(1, 0, 0).applyQuaternion(yawObject.quaternion);
+                
+                // Keep movement on horizontal plane
+                forward.y = 0;
+                forward.normalize();
+                right.y = 0;
+                right.normalize();
+
+                if (moveForward) direction.add(forward);
+                if (moveBackward) direction.sub(forward);
+                if (moveRight) direction.add(right);
+                if (moveLeft) direction.sub(right);
+
+                direction.normalize(); // Consistent speed in all directions
+
+                if (moveForward || moveBackward || moveLeft || moveRight) {
+                    const moveDistance = MOVEMENT_SPEED * delta;
+                    
+                    // Try X movement
+                    const newX = yawObject.position.x + direction.x * moveDistance;
+                    if (!checkCollision(newX, yawObject.position.z)) {
+                        yawObject.position.x = newX;
+                    }
+
+                    // Try Z movement
+                    const newZ = yawObject.position.z + direction.z * moveDistance;
+                    if (!checkCollision(yawObject.position.x, newZ)) {
+                        yawObject.position.z = newZ;
+                    }
+                }
+
+                prevTime = time;
+            } else {
+                prevTime = performance.now();
+            }
+
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>

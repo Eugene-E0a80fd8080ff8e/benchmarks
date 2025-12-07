@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Labyrinth Game</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;font-family:Arial,Helvetica,sans-serif}
+canvas{display:block}
+#blocker{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;color:#fff;text-align:center;user-select:none}
+#instructions{max-width:500px}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+<div id="blocker">
+  <div id="instructions">
+    Click to play<br><br>
+    WASD – move<br>
+    Mouse – look around<br>
+    Esc – release pointer
+  </div>
+</div>
+<script>
+/* ===== Map definition ===== */
+const MAP = [
+"XXXXXXXXXX",
+"Xs.....XXX",
+"XXXXXX.XXX",
+"XXXXXX.XXX",
+"XXX......X",
+"X.X......X",
+"X.X......X",
+"X.XX.XXX.X",
+"X........X",
+"XXXXXXXXXX"
+];
+const ROWS = MAP.length;
+const COLS = MAP[0].length;
+const TILE = 1;
+const WALL_H = 2.5;
+const PLAYER_HEIGHT = 1.7;
+const PLAYER_RADIUS = 0.2;
+
+/* ===== Three.js basic setup ===== */
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 0, 40);
+
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 100);
+
+/* ===== Lighting ===== */
+scene.add(new THREE.HemisphereLight(0xffffff,0x444444,0.6));
+const dirLight = new THREE.DirectionalLight(0xffffff,0.6);
+dirLight.position.set(5,10,2);
+scene.add(dirLight);
+
+/* ===== Materials & Geometries ===== */
+const wallGeo = new THREE.BoxBufferGeometry(TILE, WALL_H, TILE);
+const wallMat = new THREE.MeshLambertMaterial({color:0x777777});
+const floorMat = new THREE.MeshLambertMaterial({color:0xccb38a});
+
+/* ===== Build labyrinth ===== */
+const isWall = [];
+let startPos = {x:0,z:0};
+for(let r=0;r<ROWS;r++){
+  isWall[r]=[];
+  for(let c=0;c<COLS;c++){
+    const char = MAP[r][c];
+    isWall[r][c] = char === 'X';
+    if(char === 'X'){
+      const mesh = new THREE.Mesh(wallGeo, wallMat);
+      mesh.position.set(c + TILE/2, WALL_H/2, r + TILE/2);
+      scene.add(mesh);
+    }else if(char === 's'){
+      startPos = {x: c + TILE/2, z: r + TILE/2};
+    }
+  }
+}
+/* Floor */
+const floorGeo = new THREE.PlaneBufferGeometry(COLS*TILE, ROWS*TILE);
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.rotation.x = -Math.PI/2;
+floor.position.set(COLS*TILE/2,0,ROWS*TILE/2);
+scene.add(floor);
+
+/* ===== PointerLockControls (embedded minimal) ===== */
+class PointerLockControls{
+  constructor(camera, domElement){
+    this.camera = camera;
+    this.domElement = domElement;
+    camera.rotation.set(0,0,0);
+    this.isLocked = false;
+    this.pitchObject = new THREE.Object3D();
+    this.pitchObject.add(camera);
+    this.yawObject = new THREE.Object3D();
+    this.yawObject.position.y = PLAYER_HEIGHT;
+    this.yawObject.add(this.pitchObject);
+
+    const onMouseMove = (event)=>{
+      if(!this.isLocked) return;
+      const movementX = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
+      const movementY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
+      const yaw = this.yawObject.rotation;
+      const pitch = this.pitchObject.rotation;
+
+      yaw.y -= movementX * 0.002;
+      pitch.x -= movementY * 0.002;
+      pitch.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, pitch.x));
+    };
+
+    const onPointerlockChange = ()=>{
+      this.isLocked = document.pointerLockElement === this.domElement;
+      blocker.style.display = this.isLocked ? 'none':'flex';
+    };
+
+    const onPointerlockError = ()=>{ console.error('PointerLockControls: Unable to use Pointer Lock API'); };
+
+    domElement.addEventListener('click', ()=>{ domElement.requestPointerLock(); });
+    document.addEventListener('pointerlockchange', onPointerlockChange);
+    document.addEventListener('pointerlockerror', onPointerlockError);
+    document.addEventListener('mousemove', onMouseMove);
+  }
+
+  getObject(){ return this.yawObject; }
+  lock(){ this.domElement.requestPointerLock(); }
+  unlock(){ document.exitPointerLock(); }
+}
+
+/* ===== Controls & movement ===== */
+const blocker = document.getElementById('blocker');
+const controls = new PointerLockControls(camera, renderer.domElement);
+scene.add(controls.getObject());
+
+controls.getObject().position.set(startPos.x, PLAYER_HEIGHT, startPos.z);
+
+const move = { forward:false, backward:false, left:false, right:false };
+const onKey = (state)=> (e)=>{
+  switch(e.code){
+    case 'KeyW': move.forward = state; break;
+    case 'KeyS': move.backward = state; break;
+    case 'KeyA': move.left = state; break;
+    case 'KeyD': move.right = state; break;
+  }
+};
+document.addEventListener('keydown', onKey(true));
+document.addEventListener('keyup', onKey(false));
+/* prevent scroll */
+window.addEventListener('keydown', e=>{
+  if(['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','KeyW','KeyA','KeyS','KeyD'].includes(e.code)){
+     e.preventDefault();
+  }
+}, false);
+
+/* ===== Collision helpers ===== */
+function wallAt(x,z){
+  const col = Math.floor(x);
+  const row = Math.floor(z);
+  if(row<0||row>=ROWS||col<0||col>=COLS) return true;
+  return isWall[row][col];
+}
+function tryMove(pos, dx, dz){
+  let newX = pos.x + dx;
+  let newZ = pos.z + dz;
+  /* sweep X */
+  if(!wallAt(newX + Math.sign(dx)*PLAYER_RADIUS, pos.z)){
+    pos.x = newX;
+  }
+  /* sweep Z */
+  if(!wallAt(pos.x, newZ + Math.sign(dz)*PLAYER_RADIUS)){
+    pos.z = newZ;
+  }
+}
+
+/* ===== Animation loop ===== */
+const clock = new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const delta = clock.getDelta();
+  const speed = 3; /* m/s */
+  let dx = 0, dz = 0;
+  if(move.forward) dz -= speed * delta;
+  if(move.backward) dz += speed * delta;
+  if(move.left) dx -= speed * delta;
+  if(move.right) dx += speed * delta;
+
+  /* convert local to world */
+  if(dx!==0 || dz!==0){
+    const angle = controls.getObject().rotation.y;
+    const sin = Math.sin(angle), cos = Math.cos(angle);
+    const worldDX = dx * cos - dz * sin;
+    const worldDZ = dz * cos + dx * sin;
+    const pos = controls.getObject().position;
+    tryMove(pos, worldDX, worldDZ);
+  }
+  renderer.render(scene, camera);
+}
+animate();
+
+/* ===== Resize ===== */
+window.addEventListener('resize', ()=>{
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>

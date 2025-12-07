@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Labyrinth Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #gameCanvas {
+            display: block;
+        }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            pointer-events: none;
+        }
+        #crosshair::before,
+        #crosshair::after {
+            content: '';
+            position: absolute;
+            background: white;
+        }
+        #crosshair::before {
+            width: 2px;
+            height: 20px;
+            left: 9px;
+        }
+        #crosshair::after {
+            width: 20px;
+            height: 2px;
+            top: 9px;
+        }
+        #instructions {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div id="crosshair"></div>
+    <div id="instructions">
+        Use WASD to move, Mouse to look around
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+    <script>
+        // Game configuration
+        const CELL_SIZE = 1;
+        const PLAYER_HEIGHT = 1.7;
+        const MOVE_SPEED = 5;
+        const MOUSE_SENSITIVITY = 0.002;
+        
+        // Labyrinth map
+        const map = [
+            "XXXXXXXXXX",
+            "Xs.....XXX",
+            "XXXXXX.XXX",
+            "XXXXXX.XXX",
+            "XXX......X",
+            "X.X......X",
+            "X.X......X",
+            "X.XX.XXX.X",
+            "X........X",
+            "XXXXXXXXXX"
+        ];
+        
+        // Game state
+        const keys = {};
+        const mouse = { x: 0, y: 0, locked: false };
+        const player = {
+            position: new THREE.Vector3(),
+            velocity: new THREE.Vector3(),
+            rotation: { x: 0, y: 0 }
+        };
+        
+        // Initialize Three.js
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 10, 50);
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+        
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(10, 20, 10);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.camera.left = -20;
+        directionalLight.shadow.camera.right = 20;
+        directionalLight.shadow.camera.top = 20;
+        directionalLight.shadow.camera.bottom = -20;
+        scene.add(directionalLight);
+        
+        // Create labyrinth
+        const wallGeometry = new THREE.BoxGeometry(CELL_SIZE, CELL_SIZE, CELL_SIZE);
+        const wallMaterial = new THREE.MeshLambertMaterial({ color: 0x808080 });
+        const floorGeometry = new THREE.PlaneGeometry(map[0].length * CELL_SIZE, map.length * CELL_SIZE);
+        const floorMaterial = new THREE.MeshLambertMaterial({ color: 0x90EE90 });
+        
+        // Floor
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.set(map[0].length / 2, 0, map.length / 2);
+        floor.receiveShadow = true;
+        scene.add(floor);
+        
+        // Walls
+        const walls = [];
+        for (let z = 0; z < map.length; z++) {
+            for (let x = 0; x < map[z].length; x++) {
+                if (map[z][x] === 'X') {
+                    const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+                    wall.position.set(x + 0.5, 0.5, z + 0.5);
+                    wall.castShadow = true;
+                    wall.receiveShadow = true;
+                    scene.add(wall);
+                    walls.push(wall);
+                } else if (map[z][x] === 's') {
+                    player.position.set(x + 0.5, PLAYER_HEIGHT, z + 0.5);
+                }
+            }
+        }
+        
+        // Set initial camera position
+        camera.position.copy(player.position);
+        
+        // Input handling
+        document.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+            if (mouse.locked) {
+                player.rotation.y -= e.movementX * MOUSE_SENSITIVITY;
+                player.rotation.x -= e.movementY * MOUSE_SENSITIVITY;
+                player.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, player.rotation.x));
+            }
+        });
+        
+        document.addEventListener('click', () => {
+            if (!mouse.locked) {
+                renderer.domElement.requestPointerLock();
+            }
+        });
+        
+        document.addEventListener('pointerlockchange', () => {
+            mouse.locked = document.pointerLockElement === renderer.domElement;
+        });
+        
+        // Collision detection
+        function checkCollision(newPosition) {
+            const playerRadius = 0.3;
+            const checkPositions = [
+                new THREE.Vector2(newPosition.x - playerRadius, newPosition.z - playerRadius),
+                new THREE.Vector2(newPosition.x + playerRadius, newPosition.z - playerRadius),
+                new THREE.Vector2(newPosition.x - playerRadius, newPosition.z + playerRadius),
+                new THREE.Vector2(newPosition.x + playerRadius, newPosition.z + playerRadius)
+            ];
+            
+            for (const pos of checkPositions) {
+                const gridX = Math.floor(pos.x);
+                const gridZ = Math.floor(pos.y);
+                
+                if (gridZ >= 0 && gridZ < map.length && gridX >= 0 && gridX < map[gridZ].length) {
+                    if (map[gridZ][gridX] === 'X') {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        
+        // Update function
+        function update(deltaTime) {
+            // Handle movement
+            const moveVector = new THREE.Vector3();
+            const forward = new THREE.Vector3(Math.sin(player.rotation.y), 0, Math.cos(player.rotation.y));
+            const right = new THREE.Vector3(Math.sin(player.rotation.y + Math.PI / 2), 0, Math.cos(player.rotation.y + Math.PI / 2));
+            
+            if (keys['w']) moveVector.add(forward);
+            if (keys['s']) moveVector.sub(forward);
+            if (keys['a']) moveVector.sub(right);
+            if (keys['d']) moveVector.add(right);
+            
+            if (moveVector.length() > 0) {
+                moveVector.normalize().multiplyScalar(MOVE_SPEED * deltaTime);
+                const newPosition = player.position.clone().add(moveVector);
+                
+                if (!checkCollision(newPosition)) {
+                    player.position.copy(newPosition);
+                }
+            }
+            
+            // Update camera
+            camera.position.copy(player.position);
+            camera.rotation.x = player.rotation.x;
+            camera.rotation.y = player.rotation.y;
+        }
+        
+        // Animation loop
+        let lastTime = 0;
+        function animate(currentTime) {
+            requestAnimationFrame(animate);
+            
+            const deltaTime = (currentTime - lastTime) / 1000;
+            lastTime = currentTime;
+            
+            if (deltaTime > 0 && deltaTime < 0.1) {
+                update(deltaTime);
+            }
+            
+            renderer.render(scene, camera);
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Start game
+        animate(0);
+    </script>
+</body>
+</html>

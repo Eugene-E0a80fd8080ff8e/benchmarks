@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Labyrinth Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #000;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            display: block;
+        }
+        .info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="info">
+        <div>WASD to move, mouse to look around</div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+    <script>
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const map = [
+            "XXXXXXXXXX",
+            "Xs.....XXX",
+            "XXXXXX.XXX",
+            "XXXXXX.XXX",
+            "XXX......X",
+            "X.X......X",
+            "X.X......X",
+            "X.XX.XXX.X",
+            "X........X",
+            "XXXXXXXXXX"
+        ];
+
+        const BLOCK_SIZE = 1;
+        const PLAYER_HEIGHT = 1.7;
+        const PLAYER_SPEED = 0.1;
+        const MOUSE_SENSITIVITY = 0.002;
+
+        let playerPosition = { x: 0, y: PLAYER_HEIGHT, z: 0 };
+        let playerRotation = { x: 0, y: 0 };
+        let keys = {};
+        let isMouseLocked = false;
+
+        const wallGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+        const wallMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+        const floorMaterial = new THREE.MeshLambertMaterial({ color: 0x90EE90 });
+
+        for (let row = 0; row < map.length; row++) {
+            for (let col = 0; col < map[row].length; col++) {
+                const cell = map[row][col];
+                const x = col * BLOCK_SIZE;
+                const z = row * BLOCK_SIZE;
+
+                if (cell === 'X') {
+                    const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+                    wall.position.set(x, BLOCK_SIZE / 2, z);
+                    scene.add(wall);
+                } else if (cell === '.' || cell === 's') {
+                    const floor = new THREE.Mesh(
+                        new THREE.PlaneGeometry(BLOCK_SIZE, BLOCK_SIZE),
+                        floorMaterial
+                    );
+                    floor.rotation.x = -Math.PI / 2;
+                    floor.position.set(x, 0, z);
+                    scene.add(floor);
+
+                    if (cell === 's') {
+                        playerPosition.x = x;
+                        playerPosition.z = z;
+                    }
+                }
+            }
+        }
+
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(10, 10, 5);
+        scene.add(directionalLight);
+
+        camera.position.set(playerPosition.x, playerPosition.y, playerPosition.z);
+
+        document.addEventListener('keydown', (event) => {
+            keys[event.code] = true;
+        });
+
+        document.addEventListener('keyup', (event) => {
+            keys[event.code] = false;
+        });
+
+        document.addEventListener('click', () => {
+            renderer.domElement.requestPointerLock();
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            isMouseLocked = document.pointerLockElement === renderer.domElement;
+        });
+
+        document.addEventListener('mousemove', (event) => {
+            if (!isMouseLocked) return;
+
+            playerRotation.y -= event.movementX * MOUSE_SENSITIVITY;
+            playerRotation.x -= event.movementY * MOUSE_SENSITIVITY;
+            playerRotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, playerRotation.x));
+        });
+
+        function checkCollision(newX, newZ) {
+            const col = Math.floor(newX / BLOCK_SIZE);
+            const row = Math.floor(newZ / BLOCK_SIZE);
+
+            if (row < 0 || row >= map.length || col < 0 || col >= map[0].length) {
+                return true;
+            }
+
+            return map[row][col] === 'X';
+        }
+
+        function updatePlayer() {
+            const moveVector = new THREE.Vector3();
+
+            if (keys['KeyW']) moveVector.z -= 1;
+            if (keys['KeyS']) moveVector.z += 1;
+            if (keys['KeyA']) moveVector.x -= 1;
+            if (keys['KeyD']) moveVector.x += 1;
+
+            if (moveVector.length() > 0) {
+                moveVector.normalize();
+                moveVector.multiplyScalar(PLAYER_SPEED);
+
+                moveVector.applyAxisAngle(new THREE.Vector3(0, 1, 0), playerRotation.y);
+
+                const newX = playerPosition.x + moveVector.x;
+                const newZ = playerPosition.z + moveVector.z;
+
+                if (!checkCollision(newX, playerPosition.z)) {
+                    playerPosition.x = newX;
+                }
+                if (!checkCollision(playerPosition.x, newZ)) {
+                    playerPosition.z = newZ;
+                }
+            }
+
+            camera.position.set(playerPosition.x, playerPosition.y, playerPosition.z);
+            camera.rotation.set(playerRotation.x, playerRotation.y, 0);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            updatePlayer();
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>

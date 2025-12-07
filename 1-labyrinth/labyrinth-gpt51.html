@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Labyrinth GPT51 - Three.js Maze</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: #eee;
+    }
+
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at center, rgba(0,0,0,0.3), rgba(0,0,0,0.9));
+      text-align: center;
+      z-index: 10;
+      flex-direction: column;
+      padding: 1rem;
+    }
+
+    #overlay h1 {
+      margin: 0 0 0.5rem;
+      font-size: 1.8rem;
+    }
+
+    #overlay p {
+      margin: 0.2rem 0;
+      font-size: 0.95rem;
+      opacity: 0.85;
+    }
+
+    #overlay .hint {
+      margin-top: 0.8rem;
+      font-size: 0.85rem;
+      color: #aaa;
+    }
+
+    #crosshair {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      width: 20px;
+      height: 20px;
+      margin-left: -10px;
+      margin-top: -10px;
+      pointer-events: none;
+      z-index: 5;
+    }
+
+    #crosshair::before,
+    #crosshair::after {
+      content: '';
+      position: absolute;
+      background: rgba(255, 255, 255, 0.7);
+    }
+
+    /* Vertical line */
+    #crosshair::before {
+      left: 50%;
+      top: 2px;
+      width: 2px;
+      height: 16px;
+      margin-left: -1px;
+    }
+
+    /* Horizontal line */
+    #crosshair::after {
+      top: 50%;
+      left: 2px;
+      width: 16px;
+      height: 2px;
+      margin-top: -1px;
+    }
+
+    #info {
+      position: fixed;
+      left: 0.5rem;
+      bottom: 0.5rem;
+      font-size: 0.75rem;
+      color: #999;
+      z-index: 5;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 0.3rem 0.5rem;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <h1>Labyrinth</h1>
+    <p>Click to capture mouse.</p>
+    <p>Use <strong>W A S D</strong> to move, mouse to look around.</p>
+    <p class="hint">Player height: 1.7 m &mdash; Cube size: 1 &times; 1 &times; 1 m</p>
+  </div>
+  <div id="crosshair"></div>
+  <div id="info">Esc to release mouse lock</div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+    // ===== Map definition =====
+    const MAP = [
+      "XXXXXXXXXX",
+      "Xs.....XXX",
+      "XXXXXX.XXX",
+      "XXXXXX.XXX",
+      "XXX......X",
+      "X.X......X",
+      "X.X......X",
+      "X.XX.XXX.X",
+      "X........X",
+      "XXXXXXXXXX"
+    ];
+
+    const MAP_ROWS = MAP.length;
+    const MAP_COLS = MAP[0].length;
+    const CELL_SIZE = 1; // 1 meter per block
+    const PLAYER_HEIGHT = 1.7;
+
+    // ===== Three.js basic setup =====
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x050509);
+
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.35);
+    scene.add(ambientLight);
+
+    const hemiLight = new THREE.HemisphereLight(0xddddff, 0x202020, 0.8);
+    hemiLight.position.set(0, 20, 0);
+    scene.add(hemiLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.4);
+    dirLight.position.set(5, 10, 7);
+    scene.add(dirLight);
+
+    // ===== Build maze geometry =====
+    const mazeGroup = new THREE.Group();
+
+    // Convert map indices to world coordinates, centered around origin
+    function cellToWorld(col, row) {
+      const x = (col - MAP_COLS / 2 + 0.5) * CELL_SIZE;
+      const z = (row - MAP_ROWS / 2 + 0.5) * CELL_SIZE;
+      return { x, z };
+    }
+
+    const wallGeometry = new THREE.BoxGeometry(CELL_SIZE, CELL_SIZE, CELL_SIZE);
+    const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x555577, roughness: 0.8, metalness: 0.1 });
+
+    let startPos = { x: 0, z: 0 };
+
+    for (let row = 0; row < MAP_ROWS; row++) {
+      const line = MAP[row];
+      for (let col = 0; col < MAP_COLS; col++) {
+        const ch = line[col];
+        const { x, z } = cellToWorld(col, row);
+
+        if (ch === 'X') {
+          const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+          wall.position.set(x, CELL_SIZE / 2, z); // base of cube on y=0
+          wall.castShadow = false;
+          wall.receiveShadow = false;
+          mazeGroup.add(wall);
+        } else if (ch === 's') {
+          startPos = { x, z };
+        }
+      }
+    }
+
+    scene.add(mazeGroup);
+
+    // Floor plane under whole maze
+    const floorWidth = MAP_COLS * CELL_SIZE;
+    const floorHeight = MAP_ROWS * CELL_SIZE;
+
+    const floorGeometry = new THREE.PlaneGeometry(floorWidth, floorHeight, MAP_COLS, MAP_ROWS);
+    const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x202025, roughness: 1.0, metalness: 0.0 });
+    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = 0;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    // Subtle grid effect by vertex colors (optional simple variation)
+    const positionAttr = floorGeometry.attributes.position;
+    const colors = [];
+    for (let i = 0; i < positionAttr.count; i++) {
+      const vx = positionAttr.getX(i);
+      const vz = positionAttr.getZ(i);
+      const dist = Math.sqrt(vx * vx + vz * vz);
+      const shade = 0.2 + 0.1 * Math.sin(dist * 0.75);
+      colors.push(shade, shade, shade);
+    }
+    floorGeometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    floorMaterial.vertexColors = true;
+
+    // ===== Player / camera initial position =====
+    camera.position.set(startPos.x, PLAYER_HEIGHT, startPos.z);
+
+    // ===== Pointer lock controls (manual implementation) =====
+    const overlay = document.getElementById('overlay');
+    const canvas = renderer.domElement;
+
+    let isPointerLocked = false;
+    let yaw = 0;    // rotation around Y axis
+    let pitch = 0;  // rotation around X axis
+
+    function onPointerLockChange() {
+      if (document.pointerLockElement === canvas) {
+        isPointerLocked = true;
+        overlay.style.display = 'none';
+      } else {
+        isPointerLocked = false;
+        overlay.style.display = 'flex';
+      }
+    }
+
+    document.addEventListener('pointerlockchange', onPointerLockChange, false);
+
+    overlay.addEventListener('click', function () {
+      canvas.requestPointerLock();
+    });
+
+    document.addEventListener('mousemove', function (event) {
+      if (!isPointerLocked) return;
+
+      const sensitivity = 0.0025; // tweak as desired
+      yaw -= event.movementX * sensitivity;
+      pitch -= event.movementY * sensitivity;
+
+      const PI_2 = Math.PI / 2 - 0.01;
+      if (pitch > PI_2) pitch = PI_2;
+      if (pitch < -PI_2) pitch = -PI_2;
+
+      camera.rotation.set(pitch, yaw, 0);
+    }, false);
+
+    // ===== Keyboard movement controls (WASD) =====
+    const keys = {
+      KeyW: false,
+      KeyA: false,
+      KeyS: false,
+      KeyD: false
+    };
+
+    document.addEventListener('keydown', (event) => {
+      if (event.code in keys) {
+        keys[event.code] = true;
+      }
+    });
+
+    document.addEventListener('keyup', (event) => {
+      if (event.code in keys) {
+        keys[event.code] = false;
+      }
+    });
+
+    // ===== Collision detection helper =====
+    function isWallAtWorldPosition(x, z) {
+      // Convert world coordinates back to map indices
+      // Reverse of cellToWorld: col = floor(x / CELL_SIZE + MAP_COLS / 2)
+      const col = Math.floor(x / CELL_SIZE + MAP_COLS / 2);
+      const row = Math.floor(z / CELL_SIZE + MAP_ROWS / 2);
+
+      if (row < 0 || row >= MAP_ROWS || col < 0 || col >= MAP_COLS) return true; // outside treated as wall
+      return MAP[row][col] === 'X';
+    }
+
+    // ===== Animation loop & movement =====
+    const clock = new THREE.Clock();
+    const moveSpeed = 3.5; // meters per second
+
+    function animate() {
+      requestAnimationFrame(animate);
+      const delta = clock.getDelta();
+
+      if (isPointerLocked) {
+        const forward = (keys.KeyW ? 1 : 0) + (keys.KeyS ? -1 : 0);
+        const strafe = (keys.KeyD ? 1 : 0) + (keys.KeyA ? -1 : 0);
+
+        if (forward !== 0 || strafe !== 0) {
+          const length = Math.hypot(forward, strafe) || 1;
+          const normF = forward / length;
+          const normS = strafe / length;
+
+          const speed = moveSpeed * delta;
+
+          const sinY = Math.sin(yaw);
+          const cosY = Math.cos(yaw);
+
+          let dx = 0;
+          let dz = 0;
+
+          dx += normF * sinY * speed;  // forward/backward
+          dz += normF * cosY * speed;
+
+          dx += normS * cosY * speed;  // strafe (perpendicular to forward)
+          dz -= normS * sinY * speed;
+
+          const oldX = camera.position.x;
+          const oldZ = camera.position.z;
+
+          // Attempt to move on X axis
+          const newX = oldX + dx;
+          if (!isWallAtWorldPosition(newX, oldZ)) {
+            camera.position.x = newX;
+          }
+
+          // Attempt to move on Z axis
+          const newZ = oldZ + dz;
+          if (!isWallAtWorldPosition(camera.position.x, newZ)) {
+            camera.position.z = newZ;
+          }
+        }
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    animate();
+
+    // ===== Handle resize =====
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>

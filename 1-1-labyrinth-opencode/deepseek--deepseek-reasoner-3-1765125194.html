@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Labyrinth Game</title>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #startScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #222;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            cursor: pointer;
+        }
+        #gameCanvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="startScreen" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #222; color: white; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 100;">
+        <h1>Labyrinth Game</h1>
+        <p>Click to start and lock pointer</p>
+        <p>Use WASD to move, mouse to look around</p>
+    </div>
+    <canvas id="gameCanvas" style="display: none;"></canvas>
+    <script>
+        // Map definition
+        const mapString = `
+XXXXXXXXXX
+Xs.....XXX
+XXXXXX.XXX
+XXXXXX.XXX
+XXX......X
+X.X......X
+X.X......X
+X.XX.XXX.X
+X........X
+XXXXXXXXXX
+`;
+        // Parse map into grid
+        const mapLines = mapString.trim().split('\n');
+        const grid = mapLines.map(line => line.split(''));
+        const gridWidth = grid[0].length;
+        const gridHeight = grid.length;
+        
+        // Find start position
+        let startX = 0, startZ = 0;
+        for (let z = 0; z < gridHeight; z++) {
+            for (let x = 0; x < gridWidth; x++) {
+                if (grid[z][x] === 's') {
+                    startX = x;
+                    startZ = z;
+                    break;
+                }
+            }
+        }
+        
+        // Constants
+        const BLOCK_SIZE = 1; // 1 meter
+        const PLAYER_HEIGHT = 1.7; // meters
+        const PLAYER_RADIUS = 0.3; // collision radius
+        const MOVE_SPEED = 5.0; // units per second
+        const LOOK_SENSITIVITY = 0.002;
+        
+        // Game state
+        let scene, camera, renderer;
+        let walls = [];
+        let keys = {};
+        let pointerLocked = false;
+        let pitch = 0; // vertical look in radians
+        let yaw = 0;   // horizontal look in radians
+        
+        // Player position (center of player)
+        let playerPos = {
+            x: startX * BLOCK_SIZE + BLOCK_SIZE / 2,
+            y: PLAYER_HEIGHT,
+            z: startZ * BLOCK_SIZE + BLOCK_SIZE / 2
+        };
+        
+        // Initialize Three.js
+        function init() {
+            // Scene
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87CEEB); // sky blue
+            
+            // Camera
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            updateCameraRotation();
+            
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('gameCanvas'), antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            
+            // Lights
+            const ambientLight = new THREE.AmbientLight(0x404040);
+            scene.add(ambientLight);
+            
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(10, 20, 10);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.camera.left = -30;
+            directionalLight.shadow.camera.right = 30;
+            directionalLight.shadow.camera.top = 30;
+            directionalLight.shadow.camera.bottom = -30;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            scene.add(directionalLight);
+            
+            // Floor and walls
+            createMaze();
+            
+            // Event listeners
+            window.addEventListener('resize', onWindowResize);
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            document.addEventListener('mousemove', onMouseMove);
+            document.getElementById('startScreen').addEventListener('click', startGame);
+            document.addEventListener('pointerlockchange', onPointerLockChange);
+            
+            // Start animation loop
+            animate();
+        }
+        
+        function createMaze() {
+            const wallGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+            const wallMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+            const floorGeometry = new THREE.PlaneGeometry(BLOCK_SIZE, BLOCK_SIZE);
+            const floorMaterial = new THREE.MeshLambertMaterial({ color: 0x228B22 });
+            
+            // Create floor for each cell
+            for (let z = 0; z < gridHeight; z++) {
+                for (let x = 0; x < gridWidth; x++) {
+                    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+                    floor.rotation.x = -Math.PI / 2;
+                    floor.position.set(x * BLOCK_SIZE + BLOCK_SIZE / 2, 0, z * BLOCK_SIZE + BLOCK_SIZE / 2);
+                    floor.receiveShadow = true;
+                    scene.add(floor);
+                    
+                    if (grid[z][x] === 'X') {
+                        const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+                        wall.position.set(x * BLOCK_SIZE + BLOCK_SIZE / 2, BLOCK_SIZE / 2, z * BLOCK_SIZE + BLOCK_SIZE / 2);
+                        wall.castShadow = true;
+                        wall.receiveShadow = true;
+                        scene.add(wall);
+                        walls.push(wall);
+                    }
+                }
+            }
+        }
+        
+        function updateCameraRotation() {
+            camera.rotation.order = 'YXZ';
+            camera.rotation.y = yaw;
+            camera.rotation.x = pitch;
+            camera.position.copy(playerPos);
+        }
+        
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+        
+        function onKeyDown(event) {
+            keys[event.key.toLowerCase()] = true;
+        }
+        
+        function onKeyUp(event) {
+            keys[event.key.toLowerCase()] = false;
+        }
+        
+        function onMouseMove(event) {
+            if (!pointerLocked) return;
+            
+            const movementX = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
+            const movementY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
+            
+            yaw += movementX * LOOK_SENSITIVITY;
+            pitch += movementY * LOOK_SENSITIVITY;
+            
+            // Clamp pitch to prevent flipping
+            pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
+            
+            updateCameraRotation();
+        }
+        
+        function startGame() {
+            document.getElementById('startScreen').style.display = 'none';
+            document.getElementById('gameCanvas').style.display = 'block';
+            document.getElementById('gameCanvas').requestPointerLock();
+        }
+        
+        function onPointerLockChange() {
+            pointerLocked = document.pointerLockElement === document.getElementById('gameCanvas');
+        }
+        
+        function checkCollision(newX, newZ) {
+            const radius = PLAYER_RADIUS;
+            const minX = newX - radius;
+            const maxX = newX + radius;
+            const minZ = newZ - radius;
+            const maxZ = newZ + radius;
+            
+            // Convert to grid coordinates
+            const gridMinX = Math.floor(minX / BLOCK_SIZE);
+            const gridMaxX = Math.floor(maxX / BLOCK_SIZE);
+            const gridMinZ = Math.floor(minZ / BLOCK_SIZE);
+            const gridMaxZ = Math.floor(maxZ / BLOCK_SIZE);
+            
+            for (let z = gridMinZ; z <= gridMaxZ; z++) {
+                for (let x = gridMinX; x <= gridMaxX; x++) {
+                    if (z >= 0 && z < gridHeight && x >= 0 && x < gridWidth) {
+                        if (grid[z][x] === 'X') {
+                            // Wall cell, check AABB collision
+                            const wallMinX = x * BLOCK_SIZE;
+                            const wallMaxX = wallMinX + BLOCK_SIZE;
+                            const wallMinZ = z * BLOCK_SIZE;
+                            const wallMaxZ = wallMinZ + BLOCK_SIZE;
+                            
+                            // Simple AABB collision
+                            if (maxX > wallMinX && minX < wallMaxX && maxZ > wallMinZ && minZ < wallMaxZ) {
+                                return false;
+                            }
+                        }
+                    } else {
+                        // Out of bounds
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+        
+        function updatePlayer(deltaTime) {
+            if (!pointerLocked) return;
+            
+            const speed = MOVE_SPEED * deltaTime;
+            let moveX = 0;
+            let moveZ = 0;
+            
+            // Forward/backward
+            if (keys['w']) {
+                moveZ -= Math.cos(yaw) * speed;
+                moveX -= Math.sin(yaw) * speed;
+            }
+            if (keys['s']) {
+                moveZ += Math.cos(yaw) * speed;
+                moveX += Math.sin(yaw) * speed;
+            }
+            // Left/right strafe
+            if (keys['a']) {
+                moveX -= Math.cos(yaw) * speed;
+                moveZ += Math.sin(yaw) * speed;
+            }
+            if (keys['d']) {
+                moveX += Math.cos(yaw) * speed;
+                moveZ -= Math.sin(yaw) * speed;
+            }
+            
+            // Try X movement
+            if (moveX !== 0) {
+                const newX = playerPos.x + moveX;
+                if (checkCollision(newX, playerPos.z)) {
+                    playerPos.x = newX;
+                }
+            }
+            
+            // Try Z movement
+            if (moveZ !== 0) {
+                const newZ = playerPos.z + moveZ;
+                if (checkCollision(playerPos.x, newZ)) {
+                    playerPos.z = newZ;
+                }
+            }
+            
+            updateCameraRotation();
+        }
+        
+        let lastTime = 0;
+        function animate(currentTime = 0) {
+            const deltaTime = (currentTime - lastTime) / 1000;
+            lastTime = currentTime;
+            
+            if (deltaTime < 0.1) { // cap large deltas
+                updatePlayer(deltaTime);
+            }
+            
+            renderer.render(scene, camera);
+            requestAnimationFrame(animate);
+        }
+        
+        // Start the game when page loads
+        window.addEventListener('load', init);
+    </script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Labyrinth Game</title>
+<style>
+body { margin: 0; overflow: hidden; }
+canvas { display: block; }
+</style>
+</head>
+<body>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+<script>
+const map = [
+"XXXXXXXXXX",
+"Xs.....XXX",
+"XXXXXX.XXX",
+"XXXXXX.XXX",
+"XXX......X",
+"X.X......X",
+"X.X......X",
+"X.XX.XXX.X",
+"X........X",
+"XXXXXXXXXX"
+];
+
+let startX, startZ;
+for(let z = 0; z < map.length; z++){
+  for(let x = 0; x < map[z].length; x++){
+    if(map[z][x] === 's'){
+      startX = x;
+      startZ = z;
+    }
+  }
+}
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.set(startX, 1.7, startZ);
+const renderer = new THREE.WebGLRenderer();
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const wallMaterial = new THREE.MeshLambertMaterial({color: 0x888888});
+for(let z = 0; z < map.length; z++){
+  for(let x = 0; x < map[z].length; x++){
+    if(map[z][x] === 'X'){
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(1,1,1), wallMaterial);
+      wall.position.set(x, 0.5, z);
+      scene.add(wall);
+    }
+  }
+}
+
+const light = new THREE.DirectionalLight(0xffffff, 1);
+light.position.set(5,5,5);
+scene.add(light);
+scene.add(new THREE.AmbientLight(0x404040));
+
+const controls = new THREE.PointerLockControls(camera, document.body);
+document.addEventListener('click', () => {
+  controls.lock();
+});
+
+const keys = {};
+document.addEventListener('keydown', (e) => { keys[e.code] = true; });
+document.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+function animate() {
+  requestAnimationFrame(animate);
+  if(controls.isLocked){
+    let moveX = 0, moveZ = 0;
+    const speed = 0.05;
+    if(keys['KeyW']) moveZ -= speed;
+    if(keys['KeyS']) moveZ += speed;
+    if(keys['KeyA']) moveX -= speed;
+    if(keys['KeyD']) moveX += speed;
+    const newX = camera.position.x + moveX;
+    const newZ = camera.position.z + moveZ;
+    const gridZ = Math.floor(newZ + 0.5);
+    const gridX = Math.floor(newX + 0.5);
+    if(gridZ >= 0 && gridZ < map.length && gridX >= 0 && gridX < map[0].length && map[gridZ][gridX] !== 'X'){
+      camera.position.x = newX;
+      camera.position.z = newZ;
+    }
+  }
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>

@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Cube Labyrinth</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      color: #fff;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.7);
+      cursor: pointer;
+      text-align: center;
+    }
+    #overlay.hidden {
+      display: none;
+    }
+    #overlay h1 {
+      margin: 0 0 0.5em;
+      font-size: 2rem;
+    }
+    #overlay p {
+      margin: 0.15em 0;
+      font-size: 0.9rem;
+      max-width: 26rem;
+    }
+    #info {
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      font-size: 0.8rem;
+      color: #fff;
+      text-shadow: 0 0 4px #000;
+      user-select: none;
+      pointer-events: none;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+</head>
+<body>
+  <div id="overlay">
+    <h1>Cube Labyrinth</h1>
+    <p>Click anywhere to start.</p>
+    <p>Use WASD (or arrow keys) to walk.</p>
+    <p>Move the mouse to look around.</p>
+    <p>Press Esc to release the mouse.</p>
+  </div>
+  <div id="info">WASD / arrows to move &mdash; mouse to look</div>
+
+  <script>
+  (function () {
+    // Map from the prompt
+    const mapRows = [
+      "XXXXXXXXXX",
+      "Xs.....XXX",
+      "XXXXXX.XXX",
+      "XXXXXX.XXX",
+      "XXX......X",
+      "X.X......X",
+      "X.X......X",
+      "X.XX.XXX.X",
+      "X........X",
+      "XXXXXXXXXX"
+    ];
+
+    const mapHeight = mapRows.length;
+    const mapWidth = mapRows[0].length;
+
+    // Three.js setup
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x202030);
+
+    const camera = new THREE.PerspectiveCamera(
+      75,
+      window.innerWidth / window.innerHeight,
+      0.1,
+      100
+    );
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    // Lights
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.8);
+    scene.add(hemiLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+    dirLight.position.set(5, 10, 2);
+    scene.add(dirLight);
+
+    // Materials & geometry
+    const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x4a708b });
+    const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x222222 });
+
+    const wallGeometry = new THREE.BoxGeometry(1, 1, 1); // 1x1x1 meter blocks
+    const floorGeometry = new THREE.PlaneGeometry(mapWidth, mapHeight);
+
+    // Floor (at y = 0)
+    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+    floor.rotation.x = -Math.PI / 2;
+    // Center the floor under the maze
+    floor.position.set((mapWidth - 1) / 2, 0, (mapHeight - 1) / 2);
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    // Walls
+    const walls = new THREE.Group();
+
+    let startX = 1;
+    let startZ = 1;
+
+    for (let row = 0; row < mapHeight; row++) {
+      for (let col = 0; col < mapWidth; col++) {
+        const cell = mapRows[row][col];
+        if (cell === 'X') {
+          const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+          wall.position.set(col, 0.5, row); // 1m tall blocks, grounded at y=0
+          wall.castShadow = true;
+          wall.receiveShadow = true;
+          walls.add(wall);
+        } else if (cell === 's') {
+          startX = col;
+          startZ = row;
+        }
+      }
+    }
+
+    scene.add(walls);
+
+    // Player setup
+    const playerHeight = 1.7; // meters
+    const playerRadius = 0.3; // collision radius on XZ plane
+
+    const playerPosition = new THREE.Vector3(startX, playerHeight, startZ);
+    camera.position.copy(playerPosition);
+
+    // Camera orientation (yaw/pitch)
+    let yaw = 0;   // rotation around Y axis
+    let pitch = 0; // rotation around X axis
+
+    function updateCameraRotation() {
+      camera.rotation.order = 'YXZ';
+      camera.rotation.y = yaw;
+      camera.rotation.x = pitch;
+    }
+
+    // Simple collision helpers
+    function isWallAt(x, z) {
+      const j = Math.floor(x + 0.5);
+      const i = Math.floor(z + 0.5);
+      if (i < 0 || i >= mapHeight || j < 0 || j >= mapWidth) return true; // outside map => wall
+      return mapRows[i][j] === 'X';
+    }
+
+    function isBlocked(x, z) {
+      const r = playerRadius;
+      return (
+        isWallAt(x + r, z) ||
+        isWallAt(x - r, z) ||
+        isWallAt(x, z + r) ||
+        isWallAt(x, z - r)
+      );
+    }
+
+    // Input handling
+    const keys = { forward: false, backward: false, left: false, right: false };
+    const pointerElement = document.body;
+    const overlay = document.getElementById('overlay');
+
+    overlay.addEventListener('click', function () {
+      pointerElement.requestPointerLock();
+    });
+
+    function onPointerLockChange() {
+      const locked = document.pointerLockElement === pointerElement;
+      if (locked) {
+        overlay.classList.add('hidden');
+      } else {
+        overlay.classList.remove('hidden');
+      }
+    }
+
+    function onPointerLockError() {
+      overlay.textContent = 'Pointer lock failed. Click to try again.';
+    }
+
+    document.addEventListener('pointerlockchange', onPointerLockChange);
+    document.addEventListener('pointerlockerror', onPointerLockError);
+
+    // Mouse look: pulling mouse down should look down at ground
+    document.addEventListener('mousemove', function (event) {
+      if (document.pointerLockElement !== pointerElement) return;
+
+      const movementX = event.movementX || 0;
+      const movementY = event.movementY || 0;
+      const sensitivity = 0.002;
+
+      yaw -= movementX * sensitivity;
+      pitch -= movementY * sensitivity; // mouse down (positive Y) -> look down
+
+      const maxPitch = Math.PI / 2 - 0.01;
+      if (pitch > maxPitch) pitch = maxPitch;
+      if (pitch < -maxPitch) pitch = -maxPitch;
+    });
+
+    document.addEventListener('keydown', function (event) {
+      switch (event.code) {
+        case 'KeyW':
+        case 'ArrowUp':
+          keys.forward = true;
+          break;
+        case 'KeyS':
+        case 'ArrowDown':
+          keys.backward = true;
+          break;
+        case 'KeyA':
+        case 'ArrowLeft':
+          keys.left = true;
+          break;
+        case 'KeyD':
+        case 'ArrowRight':
+          keys.right = true;
+          break;
+      }
+    });
+
+    document.addEventListener('keyup', function (event) {
+      switch (event.code) {
+        case 'KeyW':
+        case 'ArrowUp':
+          keys.forward = false;
+          break;
+        case 'KeyS':
+        case 'ArrowDown':
+          keys.backward = false;
+          break;
+        case 'KeyA':
+        case 'ArrowLeft':
+          keys.left = false;
+          break;
+        case 'KeyD':
+        case 'ArrowRight':
+          keys.right = false;
+          break;
+      }
+    });
+
+    // Animation loop and movement
+    let prevTime = performance.now();
+    const moveSpeed = 3.0; // meters per second
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const time = performance.now();
+      const delta = (time - prevTime) / 1000;
+      prevTime = time;
+
+      // Calculate movement vector based on keys and current yaw
+      let moveX = 0;
+      let moveZ = 0;
+
+      const forwardDir = new THREE.Vector3(
+        Math.sin(yaw),
+        0,
+        Math.cos(yaw)
+      );
+      const rightDir = new THREE.Vector3(
+        Math.cos(yaw),
+        0,
+        -Math.sin(yaw)
+      );
+
+      if (keys.forward) {
+        moveX += forwardDir.x;
+        moveZ += forwardDir.z;
+      }
+      if (keys.backward) {
+        moveX -= forwardDir.x;
+        moveZ -= forwardDir.z;
+      }
+      if (keys.left) {
+        moveX -= rightDir.x;
+        moveZ -= rightDir.z;
+      }
+      if (keys.right) {
+        moveX += rightDir.x;
+        moveZ += rightDir.z;
+      }
+
+      const length = Math.hypot(moveX, moveZ);
+      if (length > 0) {
+        moveX /= length;
+        moveZ /= length;
+
+        const stepX = moveX * moveSpeed * delta;
+        const stepZ = moveZ * moveSpeed * delta;
+
+        let newX = playerPosition.x + stepX;
+        let newZ = playerPosition.z + stepZ;
+
+        // Separate axis resolution for nicer sliding along walls
+        let tempX = playerPosition.x;
+        let tempZ = playerPosition.z;
+
+        if (!isBlocked(newX, tempZ)) {
+          tempX = newX;
+        }
+        if (!isBlocked(tempX, newZ)) {
+          tempZ = newZ;
+        }
+
+        playerPosition.x = tempX;
+        playerPosition.z = tempZ;
+      }
+
+      // Keep camera at player height above the floor
+      camera.position.set(playerPosition.x, playerHeight, playerPosition.z);
+      updateCameraRotation();
+
+      renderer.render(scene, camera);
+    }
+
+    // Handle window resizing
+    window.addEventListener('resize', function () {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Start main loop
+    animate();
+  })();
+  </script>
+</body>
+</html>

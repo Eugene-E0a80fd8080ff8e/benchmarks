@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Labyrinth Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #instructions {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 5px;
+            z-index: 100;
+            font-size: 14px;
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div id="instructions">
+        Click to lock mouse<br>
+        WASD: Move<br>
+        Mouse: Look around<br>
+        ESC: Release mouse
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Labyrinth map
+        const labyrinthMap = [
+            "XXXXXXXXXX",
+            "Xs.....XXX",
+            "XXXXXX.XXX",
+            "XXXXXX.XXX", 
+            "XXX......X",
+            "X.X......X",
+            "X.X......X",
+            "X.XX.XXX.X",
+            "X........X",
+            "XXXXXXXXXX"
+        ];
+
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x222222);
+        scene.fog = new THREE.Fog(0x222222, 0, 20);
+
+        // Camera setup - at player eye height (1.7m)
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        
+        // Renderer setup
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.4);
+        directionalLight.position.set(5, 10, 5);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 1024;
+        directionalLight.shadow.mapSize.height = 1024;
+        scene.add(directionalLight);
+
+        // Find starting position
+        let startX = 1, startZ = 1;
+        for (let z = 0; z < labyrinthMap.length; z++) {
+            for (let x = 0; x < labyrinthMap[z].length; x++) {
+                if (labyrinthMap[z][x] === 's') {
+                    startX = x;
+                    startZ = z;
+                    break;
+                }
+            }
+        }
+
+        // Player state
+        const player = {
+            position: new THREE.Vector3(startX, 1.7, startZ), // 1.7m eye height
+            velocity: new THREE.Vector3(0, 0, 0),
+            direction: new THREE.Vector3(0, 0, 0),
+            speed: 0.08,
+            rotation: { x: 0, y: 0 }
+        };
+
+        // Material definitions
+        const wallMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+        const floorMaterial = new THREE.MeshLambertMaterial({ color: 0x444444 });
+        const wallGeometry = new THREE.BoxGeometry(1, 1, 1);
+        const floorGeometry = new THREE.PlaneGeometry(1, 1);
+        floorGeometry.rotateX(-Math.PI / 2);
+
+        // Create labyrinth geometry
+        const walls = [];
+        for (let z = 0; z < labyrinthMap.length; z++) {
+            for (let x = 0; x < labyrinthMap[z].length; x++) {
+                const cell = labyrinthMap[z][x];
+                
+                if (cell === 'X') {
+                    // Create wall cube (1x1x1m)
+                    const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+                    wall.position.set(x, 0.5, z);
+                    wall.castShadow = true;
+                    wall.receiveShadow = true;
+                    scene.add(wall);
+                    walls.push({ x, z });
+                }
+                
+                if (cell === '.' || cell === 's') {
+                    // Create floor tile
+                    const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+                    floor.position.set(x, 0, z);
+                    floor.receiveShadow = true;
+                    scene.add(floor);
+                }
+            }
+        }
+
+        // Set initial camera position
+        camera.position.copy(player.position);
+
+        // Controls state
+        const keys = {
+            w: false, s: false, a: false, d: false,
+            ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false
+        };
+
+        // Check if position is valid (not a wall)
+        function isValidPosition(x, z) {
+            const gridX = Math.floor(x + 0.5);
+            const gridZ = Math.floor(z + 0.5);
+            
+            if (gridZ < 0 || gridZ >= labyrinthMap.length || 
+                gridX < 0 || gridX >= labyrinthMap[gridZ].length) {
+                return false;
+            }
+            
+            return labyrinthMap[gridZ][gridX] !== 'X';
+        }
+
+        // Event listeners
+        document.addEventListener('keydown', (e) => {
+            if (keys.hasOwnProperty(e.key)) keys[e.key] = true;
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (keys.hasOwnProperty(e.key)) keys[e.key] = false;
+        });
+
+        // Pointer lock for mouse controls
+        renderer.domElement.addEventListener('click', () => {
+            renderer.domElement.requestPointerLock();
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            if (document.pointerLockElement === renderer.domElement) {
+                document.addEventListener('mousemove', onMouseMove);
+            } else {
+                document.removeEventListener('mousemove', onMouseMove);
+            }
+        });
+
+        function onMouseMove(e) {
+            const sensitivity = 0.002;
+            player.rotation.y -= e.movementX * sensitivity;
+            player.rotation.x -= e.movementY * sensitivity;
+            
+            // Limit vertical rotation
+            player.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, player.rotation.x));
+        }
+
+        // Movement update
+        function updateMovement() {
+            player.direction.set(0, 0, 0);
+            
+            if (keys.w || keys.ArrowUp) player.direction.z = -1;
+            if (keys.s || keys.ArrowDown) player.direction.z = 1;
+            if (keys.a || keys.ArrowLeft) player.direction.x = -1;
+            if (keys.d || keys.ArrowRight) player.direction.x = 1;
+            
+            if (player.direction.length() > 0) {
+                player.direction.normalize();
+                
+                // Rotate direction by player rotation
+                const cosY = Math.cos(player.rotation.y);
+                const sinY = Math.sin(player.rotation.y);
+                
+                const newDirection = new THREE.Vector3(
+                    player.direction.x * cosY - player.direction.z * sinY,
+                    0,
+                    player.direction.x * sinY + player.direction.z * cosY
+                );
+                
+                // Apply friction
+                player.velocity.multiplyScalar(0.8);
+                
+                // Add movement
+                player.velocity.add(newDirection.multiplyScalar(player.speed));
+            } else {
+                // Apply stronger friction when not moving
+                player.velocity.multiplyScalar(0.85);
+            }
+            
+            // Test new position for collision
+            const newPosition = player.position.clone().add(player.velocity);
+            
+            // Check X movement
+            if (isValidPosition(newPosition.x, player.position.z)) {
+                player.position.x = newPosition.x;
+            } else {
+                // Bounce back slightly
+                player.velocity.x *= -0.5;
+            }
+            
+            // Check Z movement
+            if (isValidPosition(player.position.x, newPosition.z)) {
+                player.position.z = newPosition.z;
+            } else {
+                // Bounce back slightly
+                player.velocity.z *= -0.5;
+            }
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            updateMovement();
+            
+            // Update camera
+            camera.position.copy(player.position);
+            camera.rotation.x = player.rotation.x;
+            camera.rotation.y = player.rotation.y;
+            
+            renderer.render(scene, camera);
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start animation
+        animate();
+    </script>
+</body>
+</html>

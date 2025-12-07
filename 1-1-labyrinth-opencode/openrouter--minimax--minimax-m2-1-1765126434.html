@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Labyrinth Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: Arial, sans-serif;
+        }
+        
+        #instructions {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+            z-index: 100;
+        }
+        
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 4px;
+            height: 4px;
+            background: white;
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <div id="instructions">
+        <strong>Controls:</strong><br>
+        WASD - Move<br>
+        Mouse - Look around<br>
+        Pull mouse down - Look at ground<br>
+        Push mouse up - Look at sky
+    </div>
+    <div id="crosshair"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+    
+    <script>
+        // Labyrinth map
+        const map = [
+            "XXXXXXXXXX",
+            "Xs.....XXX",
+            "XXXXXX.XXX",
+            "XXXXXX.XXX",
+            "XXX......X",
+            "X.X......X",
+            "X.X......X",
+            "X.XX.XXX.X",
+            "X........X",
+            "XXXXXXXXXX"
+        ];
+
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); // Sky blue
+
+        // Camera setup
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        
+        // Renderer setup
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(50, 50, 50);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 500;
+        directionalLight.shadow.camera.left = -50;
+        directionalLight.shadow.camera.right = 50;
+        directionalLight.shadow.camera.top = 50;
+        directionalLight.shadow.camera.bottom = -50;
+        scene.add(directionalLight);
+
+        // Ground
+        const groundGeometry = new THREE.PlaneGeometry(50, 50);
+        const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x90EE90 });
+        const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+        ground.rotation.x = -Math.PI / 2;
+        ground.receiveShadow = true;
+        scene.add(ground);
+
+        // Create labyrinth
+        const wallMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+        const wallGeometry = new THREE.BoxGeometry(1, 1, 1);
+        
+        let startPosition = { x: 0, z: 0 };
+        
+        for (let row = 0; row < map.length; row++) {
+            for (let col = 0; col < map[row].length; col++) {
+                const cell = map[row][col];
+                const x = col - map[row].length / 2;
+                const z = row - map.length / 2;
+                
+                if (cell === 'X') {
+                    const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+                    wall.position.set(x, 0.5, z);
+                    wall.castShadow = true;
+                    wall.receiveShadow = true;
+                    scene.add(wall);
+                } else if (cell === 's') {
+                    startPosition = { x: x, z: z };
+                }
+            }
+        }
+
+        // Player setup
+        const playerHeight = 1.7;
+        camera.position.set(startPosition.x, playerHeight, startPosition.z);
+
+        // Movement and controls
+        const keys = {};
+        let mouseX = 0;
+        let mouseY = 0;
+        let isMouseDown = false;
+
+        // Movement speed
+        const moveSpeed = 0.1;
+        const mouseSensitivity = 0.002;
+
+        // Event listeners
+        document.addEventListener('keydown', (event) => {
+            keys[event.code] = true;
+        });
+
+        document.addEventListener('keyup', (event) => {
+            keys[event.code] = false;
+        });
+
+        document.addEventListener('mousedown', (event) => {
+            isMouseDown = true;
+        });
+
+        document.addEventListener('mouseup', (event) => {
+            isMouseDown = false;
+        });
+
+        document.addEventListener('mousemove', (event) => {
+            if (isMouseDown) {
+                const deltaX = event.movementX || 0;
+                const deltaY = event.movementY || 0;
+                
+                // Horizontal look (left/right)
+                camera.rotation.y -= deltaX * mouseSensitivity;
+                
+                // Vertical look (up/down) - inverted for the requested behavior
+                // Pull mouse down (positive deltaY) should look down at ground
+                // Push mouse up (negative deltaY) should look up at sky
+                camera.rotation.x -= deltaY * mouseSensitivity;
+                
+                // Clamp vertical rotation to prevent over-rotation
+                camera.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, camera.rotation.x));
+            }
+        });
+
+        // Prevent context menu on right click
+        document.addEventListener('contextmenu', (event) => {
+            event.preventDefault();
+        });
+
+        // Movement function
+        function updateMovement() {
+            const direction = new THREE.Vector3();
+            const right = new THREE.Vector3();
+            
+            // Get forward and right vectors from camera
+            camera.getWorldDirection(direction);
+            right.crossVectors(camera.up, direction).normalize();
+            
+            // Apply movement based on keys
+            if (keys['KeyW']) {
+                camera.position.add(direction.multiplyScalar(moveSpeed));
+            }
+            if (keys['KeyS']) {
+                camera.position.add(direction.multiplyScalar(-moveSpeed));
+            }
+            if (keys['KeyA']) {
+                camera.position.add(right.multiplyScalar(-moveSpeed));
+            }
+            if (keys['KeyD']) {
+                camera.position.add(right.multiplyScalar(moveSpeed));
+            }
+            
+            // Keep player at constant height
+            camera.position.y = playerHeight;
+            
+            // Simple collision detection with walls
+            const playerGridX = Math.round(camera.position.x + map[0].length / 2);
+            const playerGridZ = Math.round(camera.position.z + map.length / 2);
+            
+            if (playerGridX >= 0 && playerGridX < map[0].length && 
+                playerGridZ >= 0 && playerGridZ < map.length) {
+                if (map[playerGridZ][playerGridX] === 'X') {
+                    // Simple collision response - move back
+                    camera.position.sub(direction.multiplyScalar(moveSpeed * 2));
+                }
+            }
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            updateMovement();
+            
+            renderer.render(scene, camera);
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Start the game
+        animate();
+    </script>
+</body>
+</html>

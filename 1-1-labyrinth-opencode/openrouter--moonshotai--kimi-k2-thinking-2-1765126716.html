@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Labyrinth Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #gameCanvas {
+            width: 100vw;
+            height: 100vh;
+            display: block;
+        }
+        #instructions {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div id="instructions">
+        WASD: Move | Mouse: Look around
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+    <script>
+        // Game configuration
+        const MAP = [
+            "XXXXXXXXXX",
+            "Xs.....XXX",
+            "XXXXXX.XXX",
+            "XXXXXX.XXX",
+            "XXX......X",
+            "X.X......X",
+            "X.X......X",
+            "X.XX.XXX.X",
+            "X........X",
+            "XXXXXXXXXX"
+        ];
+        
+        const BLOCK_SIZE = 1;
+        const PLAYER_HEIGHT = 1.7;
+        const MOVE_SPEED = 0.1;
+        const MOUSE_SENSITIVITY = 0.002;
+        
+        // Game state
+        const keys = {};
+        const mouse = { x: 0, y: 0, locked: false };
+        const player = {
+            position: new THREE.Vector3(),
+            velocity: new THREE.Vector3(),
+            rotation: new THREE.Euler(0, 0, 0, 'YXZ')
+        };
+        
+        // Initialize Three.js
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 10, 50);
+        
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+        
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(10, 20, 10);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        scene.add(directionalLight);
+        
+        // Create ground
+        const groundGeometry = new THREE.PlaneGeometry(MAP[0].length * BLOCK_SIZE, MAP.length * BLOCK_SIZE);
+        const groundMaterial = new THREE.MeshLambertMaterial({ color: 0x90EE90 });
+        const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.set(MAP[0].length / 2, 0, MAP.length / 2);
+        ground.receiveShadow = true;
+        scene.add(ground);
+        
+        // Create walls
+        const wallGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+        const wallMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
+        
+        for (let z = 0; z < MAP.length; z++) {
+            for (let x = 0; x < MAP[z].length; x++) {
+                const cell = MAP[z][x];
+                if (cell === 'X') {
+                    const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+                    wall.position.set(x + 0.5, BLOCK_SIZE / 2, z + 0.5);
+                    wall.castShadow = true;
+                    wall.receiveShadow = true;
+                    scene.add(wall);
+                } else if (cell === 's') {
+                    player.position.set(x + 0.5, PLAYER_HEIGHT / 2, z + 0.5);
+                }
+            }
+        }
+        
+        // Set initial camera position
+        camera.position.copy(player.position);
+        camera.position.y = PLAYER_HEIGHT;
+        
+        // Input handling
+        document.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+            if (mouse.locked) {
+                mouse.x -= e.movementX * MOUSE_SENSITIVITY;
+                mouse.y -= e.movementY * MOUSE_SENSITIVITY;
+                mouse.y = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, mouse.y));
+            }
+        });
+        
+        document.addEventListener('click', () => {
+            if (!mouse.locked) {
+                renderer.domElement.requestPointerLock();
+            }
+        });
+        
+        document.addEventListener('pointerlockchange', () => {
+            mouse.locked = document.pointerLockElement === renderer.domElement;
+        });
+        
+        // Collision detection
+        function checkCollision(position) {
+            const playerRadius = 0.3;
+            const gridX = Math.floor(position.x);
+            const gridZ = Math.floor(position.z);
+            
+            for (let dz = -1; dz <= 1; dz++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    const checkX = gridX + dx;
+                    const checkZ = gridZ + dz;
+                    
+                    if (checkZ >= 0 && checkZ < MAP.length && checkX >= 0 && checkX < MAP[checkZ].length) {
+                        if (MAP[checkZ][checkX] === 'X') {
+                            const wallPos = new THREE.Vector3(checkX + 0.5, 0, checkZ + 0.5);
+                            const distance = position.distanceTo(wallPos);
+                            if (distance < playerRadius + BLOCK_SIZE / 2) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+        
+        // Game loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Update player rotation
+            player.rotation.y = mouse.x;
+            player.rotation.x = mouse.y;
+            
+            // Calculate movement direction
+            const forward = new THREE.Vector3(0, 0, -1);
+            const right = new THREE.Vector3(1, 0, 0);
+            
+            forward.applyEuler(player.rotation);
+            right.applyEuler(player.rotation);
+            
+            forward.y = 0;
+            right.y = 0;
+            forward.normalize();
+            right.normalize();
+            
+            // Apply movement
+            const moveVector = new THREE.Vector3();
+            if (keys['w']) moveVector.add(forward);
+            if (keys['s']) moveVector.sub(forward);
+            if (keys['a']) moveVector.sub(right);
+            if (keys['d']) moveVector.add(right);
+            
+            moveVector.normalize();
+            moveVector.multiplyScalar(MOVE_SPEED);
+            
+            // Check collision for new position
+            const newPosition = player.position.clone().add(moveVector);
+            if (!checkCollision(newPosition)) {
+                player.position.copy(newPosition);
+            }
+            
+            // Update camera
+            camera.position.copy(player.position);
+            camera.position.y = PLAYER_HEIGHT;
+            camera.rotation.copy(player.rotation);
+            
+            renderer.render(scene, camera);
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        // Start game
+        animate();
+    </script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+
+Make a labyrinth game of cube blocks.
+Use this map:
+
+```
+XXXXXXXXXX
+Xs.....XXX
+XXXXXX.XXX
+XXXXXX.XXX
+XXX......X
+X.X......X
+X.X......X
+X.XX.XXX.X
+X........X
+XXXXXXXXXX
+```
+
+- dot '.' - is the empty space, player can walk through
+- 'X' is a wall
+- 's' is a starting point, otherwise similar to '.'. 
+
+Assume all blockes are 1x1x1 meters
+
+Assume player's height is 1.7 meters.
+
+Make usual WASD+mouse controls.
+
+Use three.js
+Store everything into a single file: css, js and html. 
+Name that file labyrinth-ds32r.html . Do not read other files.
+
+use this three.js :
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+

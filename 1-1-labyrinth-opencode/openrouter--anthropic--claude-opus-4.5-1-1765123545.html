@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Labyrinth Game</title>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            overflow: hidden;
+            background: #000;
+        }
+        canvas {
+            display: block;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-family: monospace;
+            font-size: 14px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 10px;
+            height: 10px;
+            border: 2px solid white;
+            border-radius: 50%;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">Click to play. WASD to move. Mouse to look.</div>
+    <div id="crosshair"></div>
+    <script>
+        const MAP = [
+            "XXXXXXXXXX",
+            "Xs.....XXX",
+            "XXXXXX.XXX",
+            "XXXXXX.XXX",
+            "XXX......X",
+            "X.X......X",
+            "X.X......X",
+            "X.XX.XXX.X",
+            "X........X",
+            "XXXXXXXXXX"
+        ];
+
+        const BLOCK_SIZE = 1;
+        const PLAYER_HEIGHT = 1.7;
+        const MOVE_SPEED = 3;
+        const MOUSE_SENSITIVITY = 0.002;
+        const COLLISION_RADIUS = 0.2;
+
+        let scene, camera, renderer;
+        let yaw = 0, pitch = 0;
+        let playerPos = { x: 0, z: 0 };
+        let keys = { w: false, a: false, s: false, d: false };
+        let isPointerLocked = false;
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(5, 10, 5);
+            directionalLight.castShadow = true;
+            scene.add(directionalLight);
+
+            createLabyrinth();
+            findStartPosition();
+
+            camera.position.set(playerPos.x, PLAYER_HEIGHT, playerPos.z);
+
+            setupControls();
+            animate();
+        }
+
+        function createLabyrinth() {
+            const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x8b4513 });
+            const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x808080 });
+            const wallGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+            const floorGeometry = new THREE.BoxGeometry(BLOCK_SIZE, 0.1, BLOCK_SIZE);
+
+            for (let z = 0; z < MAP.length; z++) {
+                for (let x = 0; x < MAP[z].length; x++) {
+                    const char = MAP[z][x];
+                    const posX = x * BLOCK_SIZE + BLOCK_SIZE / 2;
+                    const posZ = z * BLOCK_SIZE + BLOCK_SIZE / 2;
+
+                    if (char === 'X') {
+                        const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+                        wall.position.set(posX, BLOCK_SIZE / 2, posZ);
+                        wall.castShadow = true;
+                        wall.receiveShadow = true;
+                        scene.add(wall);
+                    } else {
+                        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+                        floor.position.set(posX, 0, posZ);
+                        floor.receiveShadow = true;
+                        scene.add(floor);
+                    }
+                }
+            }
+
+            const ceilingGeometry = new THREE.PlaneGeometry(MAP[0].length * BLOCK_SIZE, MAP.length * BLOCK_SIZE);
+            const ceilingMaterial = new THREE.MeshStandardMaterial({ color: 0xcccccc, side: THREE.DoubleSide });
+            const ceiling = new THREE.Mesh(ceilingGeometry, ceilingMaterial);
+            ceiling.rotation.x = Math.PI / 2;
+            ceiling.position.set(MAP[0].length * BLOCK_SIZE / 2, BLOCK_SIZE, MAP.length * BLOCK_SIZE / 2);
+            scene.add(ceiling);
+        }
+
+        function findStartPosition() {
+            for (let z = 0; z < MAP.length; z++) {
+                for (let x = 0; x < MAP[z].length; x++) {
+                    if (MAP[z][x] === 's') {
+                        playerPos.x = x * BLOCK_SIZE + BLOCK_SIZE / 2;
+                        playerPos.z = z * BLOCK_SIZE + BLOCK_SIZE / 2;
+                        return;
+                    }
+                }
+            }
+        }
+
+        function isWall(x, z) {
+            const mapX = Math.floor(x / BLOCK_SIZE);
+            const mapZ = Math.floor(z / BLOCK_SIZE);
+            if (mapZ < 0 || mapZ >= MAP.length || mapX < 0 || mapX >= MAP[mapZ].length) {
+                return true;
+            }
+            return MAP[mapZ][mapX] === 'X';
+        }
+
+        function canMoveTo(x, z) {
+            const offsets = [
+                { dx: COLLISION_RADIUS, dz: 0 },
+                { dx: -COLLISION_RADIUS, dz: 0 },
+                { dx: 0, dz: COLLISION_RADIUS },
+                { dx: 0, dz: -COLLISION_RADIUS },
+                { dx: COLLISION_RADIUS, dz: COLLISION_RADIUS },
+                { dx: -COLLISION_RADIUS, dz: COLLISION_RADIUS },
+                { dx: COLLISION_RADIUS, dz: -COLLISION_RADIUS },
+                { dx: -COLLISION_RADIUS, dz: -COLLISION_RADIUS }
+            ];
+
+            for (const offset of offsets) {
+                if (isWall(x + offset.dx, z + offset.dz)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        function setupControls() {
+            document.addEventListener('click', () => {
+                renderer.domElement.requestPointerLock();
+            });
+
+            document.addEventListener('pointerlockchange', () => {
+                isPointerLocked = document.pointerLockElement === renderer.domElement;
+            });
+
+            document.addEventListener('mousemove', (e) => {
+                if (!isPointerLocked) return;
+
+                yaw -= e.movementX * MOUSE_SENSITIVITY;
+                pitch -= e.movementY * MOUSE_SENSITIVITY;
+
+                pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
+            });
+
+            document.addEventListener('keydown', (e) => {
+                const key = e.key.toLowerCase();
+                if (key in keys) keys[key] = true;
+            });
+
+            document.addEventListener('keyup', (e) => {
+                const key = e.key.toLowerCase();
+                if (key in keys) keys[key] = false;
+            });
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        let lastTime = performance.now();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const currentTime = performance.now();
+            const deltaTime = (currentTime - lastTime) / 1000;
+            lastTime = currentTime;
+
+            if (isPointerLocked) {
+                let moveX = 0, moveZ = 0;
+
+                const forward = new THREE.Vector3(
+                    Math.sin(yaw),
+                    0,
+                    Math.cos(yaw)
+                );
+                const right = new THREE.Vector3(
+                    Math.sin(yaw + Math.PI / 2),
+                    0,
+                    Math.cos(yaw + Math.PI / 2)
+                );
+
+                if (keys.w) { moveX += forward.x; moveZ += forward.z; }
+                if (keys.s) { moveX -= forward.x; moveZ -= forward.z; }
+                if (keys.a) { moveX -= right.x; moveZ -= right.z; }
+                if (keys.d) { moveX += right.x; moveZ += right.z; }
+
+                if (moveX !== 0 || moveZ !== 0) {
+                    const length = Math.sqrt(moveX * moveX + moveZ * moveZ);
+                    moveX /= length;
+                    moveZ /= length;
+
+                    const newX = playerPos.x + moveX * MOVE_SPEED * deltaTime;
+                    const newZ = playerPos.z + moveZ * MOVE_SPEED * deltaTime;
+
+                    if (canMoveTo(newX, playerPos.z)) {
+                        playerPos.x = newX;
+                    }
+                    if (canMoveTo(playerPos.x, newZ)) {
+                        playerPos.z = newZ;
+                    }
+                }
+            }
+
+            camera.position.set(playerPos.x, PLAYER_HEIGHT, playerPos.z);
+
+            const lookX = playerPos.x + Math.sin(yaw) * Math.cos(pitch);
+            const lookY = PLAYER_HEIGHT + Math.sin(pitch);
+            const lookZ = playerPos.z + Math.cos(yaw) * Math.cos(pitch);
+            camera.lookAt(lookX, lookY, lookZ);
+
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>

@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Labyrinth Game</title>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            overflow: hidden;
+            background: #000;
+        }
+        canvas {
+            display: block;
+        }
+        #instructions {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            pointer-events: none;
+        }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 10px;
+            height: 10px;
+            border: 2px solid white;
+            border-radius: 50%;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="instructions">
+        WASD - Move<br>
+        Mouse - Look around<br>
+        Click to start
+    </div>
+    <div id="crosshair"></div>
+    <script>
+        const map = [
+            "XXXXXXXXXX",
+            "Xs.....XXX",
+            "XXXXXX.XXX",
+            "XXXXXX.XXX",
+            "XXX......X",
+            "X.X......X",
+            "X.X......X",
+            "X.XX.XXX.X",
+            "X........X",
+            "XXXXXXXXXX"
+        ];
+
+        const BLOCK_SIZE = 1;
+        const PLAYER_HEIGHT = 1.7;
+        const PLAYER_RADIUS = 0.3;
+        const MOVE_SPEED = 5;
+        const MOUSE_SENSITIVITY = 0.002;
+
+        let scene, camera, renderer;
+        let yaw = 0, pitch = 0;
+        let playerX, playerZ;
+        let keys = { w: false, a: false, s: false, d: false };
+        let isPointerLocked = false;
+
+        // Find starting position
+        function findStart() {
+            for (let z = 0; z < map.length; z++) {
+                for (let x = 0; x < map[z].length; x++) {
+                    if (map[z][x] === 's') {
+                        return { x: x + 0.5, z: z + 0.5 };
+                    }
+                }
+            }
+            return { x: 1.5, z: 1.5 };
+        }
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            const start = findStart();
+            playerX = start.x * BLOCK_SIZE;
+            playerZ = start.z * BLOCK_SIZE;
+            camera.position.set(playerX, PLAYER_HEIGHT * 0.9, playerZ);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+            directionalLight.position.set(5, 10, 5);
+            directionalLight.castShadow = true;
+            scene.add(directionalLight);
+
+            // Materials
+            const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x8b4513 });
+            const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x228b22 });
+            const ceilingMaterial = new THREE.MeshStandardMaterial({ color: 0x666666 });
+
+            // Create floor
+            const floorGeometry = new THREE.PlaneGeometry(map[0].length * BLOCK_SIZE, map.length * BLOCK_SIZE);
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.set(map[0].length * BLOCK_SIZE / 2, 0, map.length * BLOCK_SIZE / 2);
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            // Create ceiling
+            const ceiling = new THREE.Mesh(floorGeometry, ceilingMaterial);
+            ceiling.rotation.x = Math.PI / 2;
+            ceiling.position.set(map[0].length * BLOCK_SIZE / 2, BLOCK_SIZE, map.length * BLOCK_SIZE / 2);
+            scene.add(ceiling);
+
+            // Create walls from map
+            const wallGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+            
+            for (let z = 0; z < map.length; z++) {
+                for (let x = 0; x < map[z].length; x++) {
+                    if (map[z][x] === 'X') {
+                        const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+                        wall.position.set(
+                            x * BLOCK_SIZE + BLOCK_SIZE / 2,
+                            BLOCK_SIZE / 2,
+                            z * BLOCK_SIZE + BLOCK_SIZE / 2
+                        );
+                        wall.castShadow = true;
+                        wall.receiveShadow = true;
+                        scene.add(wall);
+                    }
+                }
+            }
+
+            // Event listeners
+            document.addEventListener('click', () => {
+                renderer.domElement.requestPointerLock();
+            });
+
+            document.addEventListener('pointerlockchange', () => {
+                isPointerLocked = document.pointerLockElement === renderer.domElement;
+            });
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            window.addEventListener('resize', onWindowResize);
+
+            animate();
+        }
+
+        function onMouseMove(event) {
+            if (!isPointerLocked) return;
+
+            yaw -= event.movementX * MOUSE_SENSITIVITY;
+            pitch -= event.movementY * MOUSE_SENSITIVITY;
+            
+            // Clamp pitch to avoid flipping
+            pitch = Math.max(-Math.PI / 2 + 0.01, Math.min(Math.PI / 2 - 0.01, pitch));
+        }
+
+        function onKeyDown(event) {
+            switch (event.key.toLowerCase()) {
+                case 'w': keys.w = true; break;
+                case 'a': keys.a = true; break;
+                case 's': keys.s = true; break;
+                case 'd': keys.d = true; break;
+            }
+        }
+
+        function onKeyUp(event) {
+            switch (event.key.toLowerCase()) {
+                case 'w': keys.w = false; break;
+                case 'a': keys.a = false; break;
+                case 's': keys.s = false; break;
+                case 'd': keys.d = false; break;
+            }
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function isWall(x, z) {
+            const mapX = Math.floor(x / BLOCK_SIZE);
+            const mapZ = Math.floor(z / BLOCK_SIZE);
+            
+            if (mapZ < 0 || mapZ >= map.length || mapX < 0 || mapX >= map[mapZ].length) {
+                return true;
+            }
+            
+            return map[mapZ][mapX] === 'X';
+        }
+
+        function canMoveTo(newX, newZ) {
+            // Check collision with walls using player radius
+            const checkPoints = [
+                { x: newX + PLAYER_RADIUS, z: newZ },
+                { x: newX - PLAYER_RADIUS, z: newZ },
+                { x: newX, z: newZ + PLAYER_RADIUS },
+                { x: newX, z: newZ - PLAYER_RADIUS },
+                { x: newX + PLAYER_RADIUS, z: newZ + PLAYER_RADIUS },
+                { x: newX - PLAYER_RADIUS, z: newZ - PLAYER_RADIUS },
+                { x: newX + PLAYER_RADIUS, z: newZ - PLAYER_RADIUS },
+                { x: newX - PLAYER_RADIUS, z: newZ + PLAYER_RADIUS }
+            ];
+
+            for (const point of checkPoints) {
+                if (isWall(point.x, point.z)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        let lastTime = performance.now();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const currentTime = performance.now();
+            const deltaTime = (currentTime - lastTime) / 1000;
+            lastTime = currentTime;
+
+            // Calculate movement direction
+            let moveX = 0;
+            let moveZ = 0;
+
+            const forward = new THREE.Vector3(
+                Math.sin(yaw),
+                0,
+                Math.cos(yaw)
+            );
+            const right = new THREE.Vector3(
+                Math.sin(yaw + Math.PI / 2),
+                0,
+                Math.cos(yaw + Math.PI / 2)
+            );
+
+            if (keys.w) {
+                moveX += forward.x;
+                moveZ += forward.z;
+            }
+            if (keys.s) {
+                moveX -= forward.x;
+                moveZ -= forward.z;
+            }
+            if (keys.a) {
+                moveX -= right.x;
+                moveZ -= right.z;
+            }
+            if (keys.d) {
+                moveX += right.x;
+                moveZ += right.z;
+            }
+
+            // Normalize diagonal movement
+            if (moveX !== 0 || moveZ !== 0) {
+                const length = Math.sqrt(moveX * moveX + moveZ * moveZ);
+                moveX /= length;
+                moveZ /= length;
+            }
+
+            // Apply movement with collision detection
+            const newX = playerX + moveX * MOVE_SPEED * deltaTime;
+            const newZ = playerZ + moveZ * MOVE_SPEED * deltaTime;
+
+            // Try moving in both directions
+            if (canMoveTo(newX, newZ)) {
+                playerX = newX;
+                playerZ = newZ;
+            } else if (canMoveTo(newX, playerZ)) {
+                playerX = newX;
+            } else if (canMoveTo(playerX, newZ)) {
+                playerZ = newZ;
+            }
+
+            // Update camera position
+            camera.position.set(playerX, PLAYER_HEIGHT * 0.9, playerZ);
+
+            // Update camera rotation
+            camera.rotation.order = 'YXZ';
+            camera.rotation.y = yaw;
+            camera.rotation.x = pitch;
+
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>

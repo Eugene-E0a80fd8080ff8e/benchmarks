@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Labyrinth of Cube Blocks</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #fff;
+    }
+    #container {
+      position: fixed;
+      inset: 0;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at center, rgba(0,0,0,0.6), rgba(0,0,0,0.95));
+      text-align: center;
+      pointer-events: auto;
+      transition: opacity 0.25s ease;
+      z-index: 10;
+    }
+    #overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    #overlay h1 {
+      margin-bottom: 0.5rem;
+      font-size: 1.8rem;
+    }
+    #overlay p {
+      margin: 0.1rem 0;
+      font-size: 0.95rem;
+      opacity: 0.9;
+    }
+    #startButton {
+      margin-top: 1.2rem;
+      padding: 0.6rem 1.6rem;
+      background: #1a73e8;
+      border-radius: 999px;
+      border: none;
+      color: #fff;
+      font-size: 0.95rem;
+      cursor: pointer;
+    }
+    #startButton:hover {
+      background: #296ee8;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+</head>
+<body>
+  <div id="container"></div>
+  <div id="overlay">
+    <h1>Labyrinth</h1>
+    <p>WASD to move</p>
+    <p>Mouse to look around</p>
+    <p>Pull mouse down to look at the ground, push up to look at the sky.</p>
+    <button id="startButton">Click to start</button>
+  </div>
+
+  <script>
+    (function () {
+      const container = document.getElementById('container');
+      const overlay = document.getElementById('overlay');
+      const startButton = document.getElementById('startButton');
+
+      // Maze definition from the prompt
+      const mazeRows = [
+        'XXXXXXXXXX',
+        'Xs.....XXX',
+        'XXXXXX.XXX',
+        'XXXXXX.XXX',
+        'XXX......X',
+        'X.X......X',
+        'X.X......X',
+        'X.XX.XXX.X',
+        'X........X',
+        'XXXXXXXXXX'
+      ];
+
+      const rows = mazeRows.length;
+      const cols = mazeRows[0].length;
+      const blockSize = 1.0; // 1x1x1 meter blocks
+      const playerHeight = 1.7; // meters
+
+      // THREE.js basics
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x101018);
+
+      const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      container.appendChild(renderer.domElement);
+
+      // Camera hierarchy for yaw (Y axis) and pitch (X axis)
+      const yawObject = new THREE.Object3D();
+      const pitchObject = new THREE.Object3D();
+      pitchObject.add(camera);
+      yawObject.add(pitchObject);
+      scene.add(yawObject);
+
+      // Lighting
+      const ambient = new THREE.AmbientLight(0xffffff, 0.35);
+      scene.add(ambient);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      dirLight.position.set(5, 10, 3);
+      scene.add(dirLight);
+
+      const hemiLight = new THREE.HemisphereLight(0xa0d8ff, 0x202020, 0.4);
+      scene.add(hemiLight);
+
+      // Floor (ground)
+      const floorGeometry = new THREE.PlaneGeometry(cols * blockSize, rows * blockSize);
+      const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x303030 });
+      const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.set(cols * blockSize / 2, 0, rows * blockSize / 2);
+      floor.receiveShadow = true;
+      scene.add(floor);
+
+      // Walls
+      const wallGeometry = new THREE.BoxGeometry(blockSize, blockSize, blockSize);
+      const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x8888ff, metalness: 0.1, roughness: 0.7 });
+      const wallGroup = new THREE.Group();
+
+      let startX = 1.5;
+      let startZ = 1.5;
+
+      for (let row = 0; row < rows; row++) {
+        const line = mazeRows[row];
+        for (let col = 0; col < cols; col++) {
+          const ch = line[col];
+          const worldX = col * blockSize + blockSize / 2;
+          const worldZ = row * blockSize + blockSize / 2;
+
+          if (ch === 'X') {
+            const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+            wall.position.set(worldX, blockSize / 2, worldZ);
+            wall.castShadow = true;
+            wall.receiveShadow = true;
+            wallGroup.add(wall);
+          } else if (ch === 's') {
+            startX = worldX;
+            startZ = worldZ;
+          }
+        }
+      }
+
+      scene.add(wallGroup);
+
+      // Place player at start
+      yawObject.position.set(startX, playerHeight, startZ);
+      yawObject.rotation.y = 0; // facing along -Z initially
+
+      // Controls state
+      const keys = {};
+      let isLocked = false;
+
+      window.addEventListener('keydown', (e) => {
+        keys[e.code] = true;
+      });
+
+      window.addEventListener('keyup', (e) => {
+        keys[e.code] = false;
+      });
+
+      function isWallAt(x, z) {
+        const col = Math.floor(x / blockSize);
+        const row = Math.floor(z / blockSize);
+        if (row < 0 || row >= rows || col < 0 || col >= cols) return true;
+        return mazeRows[row][col] === 'X';
+      }
+
+      function tryMove(deltaX, deltaZ) {
+        const pos = yawObject.position;
+
+        // Move in X, then in Z, to allow sliding along walls
+        let newX = pos.x + deltaX;
+        let newZ = pos.z;
+        if (!isWallAt(newX, newZ)) {
+          pos.x = newX;
+        }
+
+        newX = pos.x;
+        newZ = pos.z + deltaZ;
+        if (!isWallAt(newX, newZ)) {
+          pos.z = newZ;
+        }
+      }
+
+      const moveSpeed = 3.0; // meters per second
+      const clock = new THREE.Clock();
+
+      function updateMovement(delta) {
+        if (!isLocked) return;
+
+        let moveX = 0;
+        let moveZ = 0;
+
+        if (keys['KeyW']) moveZ -= 1;
+        if (keys['KeyS']) moveZ += 1;
+        if (keys['KeyA']) moveX -= 1;
+        if (keys['KeyD']) moveX += 1;
+
+        if (moveX === 0 && moveZ === 0) return;
+
+        const length = Math.hypot(moveX, moveZ);
+        if (length > 0) {
+          moveX /= length;
+          moveZ /= length;
+        }
+
+        const distance = moveSpeed * delta;
+        moveX *= distance;
+        moveZ *= distance;
+
+        // Apply camera yaw rotation so movement is relative to where we look
+        const sinY = Math.sin(yawObject.rotation.y);
+        const cosY = Math.cos(yawObject.rotation.y);
+
+        const worldDeltaX = moveX * cosY - moveZ * sinY;
+        const worldDeltaZ = moveZ * cosY + moveX * sinY;
+
+        tryMove(worldDeltaX, worldDeltaZ);
+      }
+
+      function onMouseMove(event) {
+        if (!isLocked) return;
+
+        const movementX = event.movementX || 0;
+        const movementY = event.movementY || 0;
+
+        const sensitivity = 0.0025;
+
+        // Yaw (left/right)
+        yawObject.rotation.y -= movementX * sensitivity;
+
+        // Pitch (up/down). Pull mouse down -> look down; push up -> look up.
+        pitchObject.rotation.x -= movementY * sensitivity;
+
+        const maxPitch = Math.PI / 2 - 0.01;
+        const minPitch = -Math.PI / 2 + 0.01;
+        pitchObject.rotation.x = Math.max(minPitch, Math.min(maxPitch, pitchObject.rotation.x));
+      }
+
+      function onPointerLockChange() {
+        const locked = document.pointerLockElement === renderer.domElement;
+        isLocked = locked;
+        if (locked) {
+          overlay.classList.add('hidden');
+        } else {
+          overlay.classList.remove('hidden');
+        }
+      }
+
+      function onPointerLockError() {
+        console.error('Pointer lock error');
+      }
+
+      document.addEventListener('mousemove', onMouseMove, false);
+      document.addEventListener('pointerlockchange', onPointerLockChange, false);
+      document.addEventListener('pointerlockerror', onPointerLockError, false);
+
+      function requestLock() {
+        if (renderer.domElement.requestPointerLock) {
+          renderer.domElement.requestPointerLock();
+        }
+      }
+
+      startButton.addEventListener('click', () => {
+        requestLock();
+      });
+
+      renderer.domElement.addEventListener('click', () => {
+        if (!isLocked) requestLock();
+      });
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      function animate() {
+        requestAnimationFrame(animate);
+        const delta = clock.getDelta();
+        updateMovement(delta);
+        renderer.render(scene, camera);
+      }
+
+      animate();
+    })();
+  </script>
+</body>
+</html>
