@@ -1,0 +1,69 @@
+
+The file 'labyrinth.html' contains a 3D labyrinth program which displays the labyrinth to user and allows to navigate it.
+You need to implement "Mirrors in a labyrinth game" in 'labyrinth.html'.
+
+---
+
+# Mirrors in a labyrinth game
+
+Update the map to a new one:
+```javascript
+const worldmap =
+String.raw`XXXXXXXXXXXXXXXX
+X..............X
+X.../.......\..X
+X..............X
+XX......X......X
+X+../...X......X
+XX......X......X
+X..............X
+X......./.../..X
+X..............X
+X..............X
+X...\...\......X
+X..XXXXXXX.....X
+X.s............X
+X..............X
+XXXXXXXXXXXX*XXX`;
+```
+
+Each symbol at this map corresponds to to 1x1 meters block.
+
+"X" - wall block. Its size is 1x1x1 meters.
+
+"." - free space. The user can freely navigate there.
+
+"+" - the place in the wall, where the laser is shining from.
+From its source the laser travels in the direction parallel to one of the axes. The laser should travel from the center of the block to the center of the block.
+From its initial point it should shine in the direction which does not have adjacent wall.
+It shines from the center of a block it occupies. 
+
+
+"/" and "\" - those are mirrors. mirroes change direction of the light which shines into it.
+
+For "/" mirror: 
+
+- for the light coming from west, the mirror changes light's deriction to northbound.
+- for the light coming from north, the mirror changes light's deriction to westbound.
+- for the light coming from east, the mirror changes light's deriction to southbound.
+- for the light coming from south, the mirror changes light's deriction to eastbound.
+
+For "\" mirror: 
+
+- for the light coming from west, the mirror changes light's deriction to southbound.
+- for the light coming from south, the mirror changes light's deriction to westbound.
+- for the light coming from east, the mirror changes light's deriction to northbound.
+- for the light coming from north, the mirror changes light's deriction to eastbound.
+
+The user is able to flip the mirrors from one state to another. So, when there is an mirror in from of the user, closer than 2 meters, it should highlight.
+Once mirror is highlighted, the usermay press the action button "E" , and one type of mirror should be replaced with abnother type of mirror. 
+For now, skip the animation -- just replace the mirror instantly.
+
+Mirrors should be portrayed with a flat surface , oriented at 45 degrees to the horizontal axes. Mirrors should be made of double-sided polygons.
+
+"*" - this is the target for the light. When the light shines into it, the user have solved the puzzle, the game is over. Let user know about it.
+
+The laser should be protrayed as a thick red line, coming out of the source, changing its derection on every mirror it touches. The laser should stop at a wall or at a target
+
+"s" - starting point, where the player should spawned at the beginning.
+

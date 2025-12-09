@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Labyrinth Game - Mirrors</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        canvas { display: block; }
+        #ui {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-family: Arial, sans-serif;
+            text-align: center;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 20px;
+            border-radius: 10px;
+        }
+        #message { font-size: 24px; margin-bottom: 20px; }
+        #subtext { font-size: 16px; color: #ccc; }
+        #win-screen {
+            display: none;
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 255, 0, 0.3);
+            pointer-events: none;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 48px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px #000;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+</head>
+<body>
+    <div id="ui">
+        <div id="message">Click to Play</div>
+        <div id="subtext">WASD to Move, Mouse to Look<br>E to Interact with Mirrors</div>
+    </div>
+    <div id="win-screen">
+        <div>LEVEL COMPLETED!</div>
+        <div style="font-size: 24px; margin-top: 20px;">The light reached the target.</div>
+    </div>
+
+    <script>
+        // Game Constants
+        const BLOCK_SIZE = 1;
+        const PLAYER_HEIGHT = 1.7;
+        const MOVEMENT_SPEED = 5.0;
+        const PLAYER_RADIUS = 0.3;
+
+        // Map Data
+        const worldmap = String.raw`XXXXXXXXXXXXXXXX
+X..............X
+X.../.......\..X
+X..............X
+XX......X......X
+X+../...X......X
+XX......X......X
+X..............X
+X......./.../..X
+X..............X
+X..............X
+X...\...\......X
+X..XXXXXXX.....X
+X.s............X
+X..............X
+XXXXXXXXXXXX*XXX`;
+
+        const mapRows = worldmap.split('\n');
+        const mapHeight = mapRows.length;
+        const mapWidth = mapRows[0].length;
+        
+        // Grid Data Structure
+        // grid[z][x] = { type: char, mesh: THREE.Mesh | null, ... }
+        const grid = [];
+        
+        // Three.js Setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 0, 20);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+
+        // Materials
+        const wallMaterial = new THREE.MeshLambertMaterial({ color: 0x888888 }); 
+        const floorMaterial = new THREE.MeshLambertMaterial({ color: 0x228B22 });
+        // Mirror Material (double sided)
+        const mirrorMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0xAAAAAA, 
+            side: THREE.DoubleSide, 
+            shininess: 100,
+            specular: 0xffffff
+        });
+        const mirrorHighlightMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0xFFFFFF, 
+            side: THREE.DoubleSide, 
+            emissive: 0x444444
+        });
+        const sourceMaterial = new THREE.MeshLambertMaterial({ color: 0xFF0000 }); // distinctive wall
+        const targetMaterial = new THREE.MeshLambertMaterial({ color: 0xFFFF00, emissive: 0x222200 }); // Yellow target
+
+        // Geometries
+        const boxGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+        const mirrorGeometry = new THREE.PlaneGeometry(0.8, 0.8); // Slightly smaller than cell to fit nicely
+        
+        // Floor
+        const floorGeometry = new THREE.PlaneGeometry(mapWidth * BLOCK_SIZE, mapHeight * BLOCK_SIZE);
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.set((mapWidth * BLOCK_SIZE) / 2 - 0.5, 0, (mapHeight * BLOCK_SIZE) / 2 - 0.5);
+        scene.add(floor);
+
+        // Game State
+        let startPos = { x: 0, z: 0 };
+        let sourcePos = null;
+        let laserMeshes = [];
+        let interactableMirrors = [];
+
+        // Parse Map & Build World
+        for (let z = 0; z < mapHeight; z++) {
+            const row = [];
+            for (let x = 0; x < mapWidth; x++) {
+                const char = mapRows[z][x];
+                const posX = x * BLOCK_SIZE;
+                const posZ = z * BLOCK_SIZE;
+                const cell = { x, z, type: char, mesh: null };
+
+                if (char === 'X') {
+                    const wall = new THREE.Mesh(boxGeometry, wallMaterial);
+                    wall.position.set(posX, BLOCK_SIZE / 2, posZ);
+                    scene.add(wall);
+                    cell.mesh = wall;
+                } 
+                else if (char === 's') {
+                    startPos = { x: posX, z: posZ };
+                }
+                else if (char === '+') {
+                    // Source acts as a wall but emits laser
+                    const src = new THREE.Mesh(boxGeometry, sourceMaterial);
+                    src.position.set(posX, BLOCK_SIZE / 2, posZ);
+                    scene.add(src);
+                    cell.mesh = src;
+                    sourcePos = { x, z };
+                }
+                else if (char === '*') {
+                    const tgt = new THREE.Mesh(boxGeometry, targetMaterial);
+                    tgt.position.set(posX, BLOCK_SIZE / 2, posZ);
+                    scene.add(tgt);
+                    cell.mesh = tgt;
+                }
+                else if (char === '/' || char === '\\') {
+                    const mirror = new THREE.Mesh(mirrorGeometry, mirrorMaterial.clone());
+                    mirror.position.set(posX, 0.5, posZ);
+                    
+                    // Set orientation
+                    if (char === '/') {
+                        mirror.rotation.y = -Math.PI / 4;
+                    } else {
+                        mirror.rotation.y = Math.PI / 4;
+                    }
+                    
+                    scene.add(mirror);
+                    cell.mesh = mirror;
+                    interactableMirrors.push(cell);
+                }
+                
+                row.push(cell);
+            }
+            grid.push(row);
+        }
+
+        camera.position.set(startPos.x, PLAYER_HEIGHT, startPos.z);
+        camera.rotation.order = 'YXZ'; 
+
+        // Laser Logic
+        function updateLaser() {
+            // Clear old laser
+            laserMeshes.forEach(m => scene.remove(m));
+            laserMeshes = [];
+
+            if (!sourcePos) return;
+
+            // Determine Start Direction
+            // Check neighbors of sourcePos
+            let dir = null;
+            const sx = sourcePos.x;
+            const sz = sourcePos.z;
+            
+            // Check directions: East (+X), West (-X), South (+Z), North (-Z)
+            const directions = [
+                { dx: 1, dz: 0 }, 
+                { dx: -1, dz: 0 }, 
+                { dx: 0, dz: 1 }, 
+                { dx: 0, dz: -1 }
+            ];
+
+            for (let d of directions) {
+                const nx = sx + d.dx;
+                const nz = sz + d.dz;
+                if (nx >= 0 && nx < mapWidth && nz >= 0 && nz < mapHeight) {
+                    const neighborType = grid[nz][nx].type;
+                    if (neighborType !== 'X' && neighborType !== '+' && neighborType !== '*') { // Assuming source doesn't point directly into wall/target immediately unless map implies
+                        // Prompt: "shine in the direction which does not have adjacent wall"
+                        // But wait, what if neighbor is mirror? That is not a wall.
+                        // So if neighbor is NOT 'X' and NOT '+'.
+                        dir = d;
+                        break;
+                    }
+                }
+            }
+            
+            if (!dir) return; // Blocked completely?
+
+            let cx = sx;
+            let cz = sz;
+            let currentDir = { ...dir };
+            let pathPoints = [];
+            pathPoints.push(new THREE.Vector3(cx * BLOCK_SIZE, 0.5, cz * BLOCK_SIZE));
+
+            const MAX_STEPS = 100;
+            let steps = 0;
+            let won = false;
+
+            while (steps < MAX_STEPS) {
+                // Determine next cell
+                const nx = cx + currentDir.dx;
+                const nz = cz + currentDir.dz;
+
+                if (nx < 0 || nx >= mapWidth || nz < 0 || nz >= mapHeight) {
+                    // Out of bounds, stop
+                    pathPoints.push(new THREE.Vector3(nx * BLOCK_SIZE, 0.5, nz * BLOCK_SIZE)); // Extrapolate to edge?
+                    break;
+                }
+
+                const cell = grid[nz][nx];
+                
+                // Add point at new center
+                const p = new THREE.Vector3(nx * BLOCK_SIZE, 0.5, nz * BLOCK_SIZE);
+                pathPoints.push(p);
+
+                if (cell.type === 'X' || cell.type === '+') {
+                    // Hit wall/source, stop
+                    break;
+                } else if (cell.type === '*') {
+                    // Hit target, Win
+                    won = true;
+                    break;
+                } else if (cell.type === '/' || cell.type === '\\') {
+                    // Reflect
+                    // Current Dir (dx, dz) is the movement vector.
+                    
+                    if (cell.type === '/') {
+                        // Rules:
+                        // From West (Moving East dx=1) -> North (dz=-1)
+                        // From North (Moving South dz=1) -> West (dx=-1)
+                        // From East (Moving West dx=-1) -> South (dz=1)
+                        // From South (Moving North dz=-1) -> East (dx=1)
+                        if (currentDir.dx === 1) { currentDir = { dx: 0, dz: -1 }; }
+                        else if (currentDir.dz === 1) { currentDir = { dx: -1, dz: 0 }; }
+                        else if (currentDir.dx === -1) { currentDir = { dx: 0, dz: 1 }; }
+                        else if (currentDir.dz === -1) { currentDir = { dx: 1, dz: 0 }; }
+                    } else { // '\'
+                        // Rules:
+                        // From West (Moving East dx=1) -> South (dz=1)
+                        // From South (Moving North dz=-1) -> West (dx=-1)
+                        // From East (Moving West dx=-1) -> North (dz=-1)
+                        // From North (Moving South dz=1) -> East (dx=1)
+                        if (currentDir.dx === 1) { currentDir = { dx: 0, dz: 1 }; }
+                        else if (currentDir.dz === -1) { currentDir = { dx: -1, dz: 0 }; }
+                        else if (currentDir.dx === -1) { currentDir = { dx: 0, dz: -1 }; }
+                        else if (currentDir.dz === 1) { currentDir = { dx: 1, dz: 0 }; }
+                    }
+                }
+
+                cx = nx;
+                cz = nz;
+                steps++;
+            }
+
+            // Draw Path
+            if (pathPoints.length > 1) {
+                // Create Cylinder segments
+                for (let i = 0; i < pathPoints.length - 1; i++) {
+                    const p1 = pathPoints[i];
+                    const p2 = pathPoints[i+1];
+                    
+                    const dist = p1.distanceTo(p2);
+                    const cylGeom = new THREE.CylinderGeometry(0.05, 0.05, dist, 8);
+                    // Cylinder defaults to Y axis. Rotate to align p1->p2
+                    // Midpoint
+                    const mid = p1.clone().add(p2).multiplyScalar(0.5);
+                    
+                    const cyl = new THREE.Mesh(cylGeom, new THREE.MeshBasicMaterial({ color: 0xFF0000 }));
+                    cyl.position.copy(mid);
+                    cyl.lookAt(p2);
+                    cyl.rotateX(Math.PI / 2); // Cylinder main axis is Y. lookAt points Z. formatting.
+                    
+                    scene.add(cyl);
+                    laserMeshes.push(cyl);
+                }
+            }
+
+            if (won) {
+                document.getElementById('win-screen').style.display = 'flex';
+                document.getElementById('ui').style.display = 'none';
+                isLocked = false;
+                document.exitPointerLock();
+            }
+        }
+
+        // Initial Calculation
+        updateLaser();
+
+
+        // Input & Controls
+        let pitch = 0;
+        let yaw = 0;
+        const keys = { w: false, a: false, s: false, d: false };
+        
+        document.addEventListener('keydown', (e) => {
+            switch(e.code) {
+                case 'KeyW': keys.w = true; break;
+                case 'KeyA': keys.a = true; break;
+                case 'KeyS': keys.s = true; break;
+                case 'KeyD': keys.d = true; break;
+                case 'KeyE': tryInteract(); break;
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            switch(e.code) {
+                case 'KeyW': keys.w = false; break;
+                case 'KeyA': keys.a = false; break;
+                case 'KeyS': keys.s = false; break;
+                case 'KeyD': keys.d = false; break;
+            }
+        });
+
+        // Mouse Lock
+        const ui = document.getElementById('ui');
+        let isLocked = false;
+        
+        document.body.addEventListener('click', () => {
+            if (!isLocked && document.getElementById('win-screen').style.display === 'none') {
+                document.body.requestPointerLock();
+            }
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            if (document.pointerLockElement === document.body) {
+                isLocked = true;
+                ui.style.display = 'none';
+            } else {
+                isLocked = false;
+                if (document.getElementById('win-screen').style.display === 'none') {
+                    ui.style.display = 'block';
+                }
+            }
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (isLocked) {
+                yaw -= e.movementX * 0.002;
+                pitch -= e.movementY * 0.002;
+                pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch));
+                camera.rotation.set(pitch, yaw, 0);
+            }
+        });
+        
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Collision
+        function checkCollision(x, z) {
+            const checkPoints = [
+                { x: x - PLAYER_RADIUS, z: z - PLAYER_RADIUS },
+                { x: x + PLAYER_RADIUS, z: z - PLAYER_RADIUS },
+                { x: x - PLAYER_RADIUS, z: z + PLAYER_RADIUS },
+                { x: x + PLAYER_RADIUS, z: z + PLAYER_RADIUS }
+            ];
+            for (let p of checkPoints) {
+                const gridX = Math.round(p.x / BLOCK_SIZE);
+                const gridZ = Math.round(p.z / BLOCK_SIZE);
+                if (gridZ >= 0 && gridZ < mapHeight && gridX >= 0 && gridX < mapWidth) {
+                    if (grid[gridZ][gridX].type === 'X' || grid[gridZ][gridX].type === '+') return true;
+                } else return true;
+            }
+            return false;
+        }
+
+        // Interaction
+        let highlightedMirror = null;
+
+        function checkHighLight() {
+            // Find mirror in front
+            // We can raycast from position
+            // Simplification: Check distance to all mirrors, then check if angle is small
+            
+            if (!isLocked) return;
+
+            // Reset previous
+            if (highlightedMirror) {
+                highlightedMirror.mesh.material = mirrorMaterial; // Revert material
+                highlightedMirror = null;
+            }
+
+            const raycaster = new THREE.Raycaster();
+            raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+            
+            const intersects = raycaster.intersectObjects(interactableMirrors.map(c => c.mesh));
+            
+            if (intersects.length > 0) {
+                const hit = intersects[0];
+                if (hit.distance < 2.0) {
+                    // Find which cell
+                    const mesh = hit.object;
+                    highlightedMirror = interactableMirrors.find(c => c.mesh === mesh);
+                    
+                    if (highlightedMirror) {
+                        highlightedMirror.mesh.material = mirrorHighlightMaterial; // Use highlight
+                    }
+                }
+            }
+        }
+
+        function tryInteract() {
+            if (highlightedMirror) {
+                // Flip
+                const cell = highlightedMirror;
+                if (cell.type === '/') {
+                    cell.type = '\\';
+                    cell.mesh.rotation.y = Math.PI / 4;
+                } else {
+                    cell.type = '/';
+                    cell.mesh.rotation.y = -Math.PI / 4;
+                }
+                updateLaser();
+            }
+        }
+
+        // Loop
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (isLocked) {
+                const delta = clock.getDelta();
+                const speed = MOVEMENT_SPEED * delta;
+
+                const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+                const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+
+                let dx = 0, dz = 0;
+                if (keys.w) { dx += forward.x; dz += forward.z; }
+                if (keys.s) { dx -= forward.x; dz -= forward.z; }
+                if (keys.d) { dx += right.x; dz += right.z; }
+                if (keys.a) { dx -= right.x; dz -= right.z; }
+
+                if (dx !== 0 || dz !== 0) {
+                    // Normalize?
+                    const len = Math.sqrt(dx*dx + dz*dz);
+                    dx = (dx/len) * speed;
+                    dz = (dz/len) * speed;
+
+                    if (!checkCollision(camera.position.x + dx, camera.position.z)) camera.position.x += dx;
+                    if (!checkCollision(camera.position.x, camera.position.z + dz)) camera.position.z += dz;
+                }
+                
+                checkHighLight();
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+    </script>
+</body>
+</html>
