@@ -1,17 +1,13 @@
 
 # 2-mirrors
 
-Done on Dec 7, 2025.
+Done on Dec 9, 2025.
 
 Make a mirrors-in-a-labyrinth game, using the labyrinth from (1-1-labyrinth-opencode)[./1-1-labyrinth-opencode.md] as a starting point. ([full prompt](./2-mirrors/_prompt.txt))
 
 A solution, which demonstrates the prompt:  TBD
 
-Here, I am listing only the apparent problems and divergencies from prompt.
-Also, if a bigger problem covers a smaller problem, the smaller will not be listed.
-For example, if choice of colors are so bad, that I can not see a thing, I will list only that.
-Or, if navigation is broken, I can not possible test for proper clipping through the walls.
-Also, If I mention that there is clipping on wall's corners, it is probably a sign that clipping otherwise works.
+Here, I am listing only the apparent problems and divergencies from the prompt.
 
 ### Notes
 
@@ -20,210 +16,209 @@ Also, If I mention that there is clipping on wall's corners, it is probably a si
 
 ## GLM-4.5 from z.ai API
 
-*First run*: 2/5
+*First run*: 4/5
 
-- Mouse vertical movement matches to rotation around one of horizontal world axis
-- WASD keys directly changes world coordinates, disregarding user's rotation.
+- The displayed state of a mirror does not match its reflection direction.
+- For some mirrors, the laser goes "through" a mirror, changing its direction by 90 degrees.
 
+*Second run*: 5/5
 
-*Second run*: 2/5
+- The state of the mirror may change multiple times for the short moment while "E" is pressed.
 
-- Mouse vertical movement matches to rotation around one of horizontal world axis
-- Bounding law apparently shifted to a single block somewhere (classic -1/+1 problem)
+*Third run*: 4/5
 
-*Third run*: 1/5
-
-- Mouse vertical movement matches to rotation around one of horizontal world axis
-- Bounding law apparently shifted to a single block somewhere (classic -1/+1 problem)
-- W-S movement gets inverted when the user is aligned with either of OX or OZ axis. It is direct otherwise.
+- The laser goes "through" a mirror, changing its direction by 90 degrees.
 
 ## GLM-4.6 from z.ai API
 
-*First run*: ?/5
+*First run*: 3/5
 
-- Walls are higher than 1 meter
-- W-S controls are inverted
-- WASD movement is extremely slow
+- The laser goes "through" a mirror, changing its direction by 90 degrees.
 
-*Second run*: 3/5
+*Second run*: 4/5
 
-- Walls are higher than 1 meter
-- Allows to come to a wall close enough to clip the camera through and look behind the wall.
+- The laser goes "through" a mirror, changing its direction by 90 degrees.
 
-*Third run*:  2/5
+*Third run*:  4/5
 
-- W-S controls are inverted
-- WASD movement is slow
-- Allows to come to a wall close enough to clip the camera through and look behind the wall.
+- The laser goes "through" a mirror, changing its direction by 90 degrees.
 
 ## grok-code-fast from x.ai API
+
+*First run*: 1/5
+
+- No laser
+- Can not change the state of the mirrors
+
+*Second run*: 0/5
+
+- All black. Broken
+
+*Third run*:  0/5
+
+- All black. Broken
+
+## grok-4-fast from x.ai API
 
 *First run*: 0/5
 
 - All black. Broken
 
-*Second run*: 1/5
+*Second run*: 2/5
 
-- Hard to pinpoint errors separately. Mostly broken, though some movement is possible.
-
-*Third run*:  0/5
-
-- All white. Broken
-
-
-## grok-4-fast from x.ai API
-
-*First run*: 3/5
-
-- Mouse vertical movement matches to rotation around one of horizontal world axis
-- Allows to come to a wall close enough to clip the camera through and look behind the wall.
-
-*Second run*: 0/5
-
-- Bad HTML came out. (this might be OpenCode problem)
+- All mirrors which was denoted as "\" at the map, are absent.
 
 *Third run*:  0/5
 
-- Bad HTML came out. (this might be OpenCode problem)
+- No changes.
 
 ## grok-4 from x.ai API
 
 *First run*: 0/5
 
-- Bad HTML came out. (this might be OpenCode problem)
+- No changes.
 
-*Second run*: 0/5
+*Second run*: 1/5
 
-- Bad HTML came out. (this might be OpenCode problem)
+- Can not interact with mirrors
+- Looks like all the mirrors are shifted southwards 0.5 meters
+- "Laser" is not a straight line
 
 *Third run*:  0/5
 
-- Bad HTML came out. (this might be OpenCode problem)
+- No changes.
 
 ## gpt-5.1 from OpenAI API
 
-*First run*: 3/5
+*First run*: 5/5
 
-- W-S controls are weird. As if the AI mistakingly multiplies player's angle by 2 (or 0.5) somewhere
+- Very good!
+- Laser slightly clips to the other side of the mirror.
 
 *Second run*: 4/5
 
-- W-S are inverted 
-
-*Third run*:  4/5
-
-- Mouse's vertical axis is inverted
-
-## gemini-3-pro from OpenRouter API
-
-*First run*: 5/5
-
-- Perfect!
-
-*Second run*: 5/5
-
-- At first gemini-3-pro refused to do the file #2 when the same folder contained similarly named file #1. I had to provide extra instuction on ignoring the other files.
-- Otherwise perfect!
+- The laser goes "through" a mirror, changing its direction by 90 degrees.
 
 *Third run*:  5/5
 
-- At first gemini-3-pro refused to do the file #3 when the same folder contained similarly named file #1. I had to provide extra instuction on ignoring the other files. Probably need to use and empty folder for every run. Maybe even inside a docker container.
-- Otherwise perfect!
+- Very good!
+- Laser slightly clips to the other side of the mirror.
+
+## gemini-3-pro from OpenRouter API
+
+*First run*: 0/5
+
+- No changes.
+- Gemini 3 pro is somewhat hard to steer towards following the instructions.
+
+*Second run*: 4/5
+
+- The laser goes "through" a mirror, changing its direction by 90 degrees.
+- Pallete was changed to gray-blackish
+
+*Third run*:  1/5
+
+- Does not react to mouse movement or keyboard presses.
+- The laser goes "through" a mirror, changing its direction by 90 degrees.
 
 ## haiku-4.5 from OpenRouter API
 
 *First run*: 4/5
 
-- W-S is inverted
+- Laser trajectory is correct , but translate (0.5,0.5) to the boundary of the boxes.
+- The laser goes "through" a mirror, changing its direction by 90 degrees (for some mirrors)
 
-*Second run*: 0/5
+*Second run*: 4/5
 
-- All black
+- Mirrors do not change its apparent rotation, when they change their state.
+- Mirrors are at 45 degrees to horizontal axes
 
-*Third run*:  0/5
+*Third run*:  4/5
 
-- Player is spawed outside of labyrinth
-- Can not navigate
+- Laser trajectory is correct , but translate (0.5,0.5) to the boundary of the boxes.
+- The laser goes "through" a mirror, changing its direction by 90 degrees (for some mirrors)
 
 ## sonnet-4.5 from OpenRouter API
 
 *First run*: 4/5
 
-- W-S is inverted
+- The laser goes "through" a mirror, changing its direction by 90 degrees 
 
-*Second run*: 3/5
+*Second run*: 4/5
 
-- Now ceiling is present, and it is too low, it obstructs view.
+- The laser goes "through" a mirror, changing its direction by 90 degrees 
 
 *Third run*:  4/5
-- W-S is inverted
-- The ceiling is present again, but now it is on a proper height.
+
+- The laser goes "through" a mirror, changing its direction by 90 degrees 
 
 ## opus-4.5 from OpenRouter API
 
 *First run*: 4/5
 
-- A-D is inverted
-- The ceiling is present. And it is too low again.
+- Laser disappears completely, if I flip a single mirror
 
-*Second run*: 4/5
+*Second run*: 5/5
 
-- W-S is inverted
-- shadows are absent for most of the cubes
+- Perfect!
+- Laser slightly clips to the other side of the mirror.
 
 *Third run*:  5/5
 
-- shadows are absent for most of the cubes
+- Perfect!
+- Laser slightly clips to the other side of the mirror.
 
 ## deepseek-reasoner (deepseek v3.2 thinking) from Deepseek API 
 
-Deepseek is not like other AIs: it makes extensive use of todo-list, writes output the html, reads it multiple times, edits it, manages todo list, calls bash commands on that file.
-
-Deepseek explores contents of the folder where opencode is running from. I noticed it tried to read the solution by gpt-5.1. I had to change the running script to do all the work in /tmp , where no other solutions are available.
-
 *First run*: 0/5
 
-- All blue. Can not navigate. Probably bad choice of colors.
+- All black. Nothing happens when I click "Play"
 
 *Second run*: 3/5
 
-- Mouse' vertical movement matches to rotation around one of horizontal world axis
+- The laser goes "through" a mirror, changing its direction by 90 degrees 
+- The laser disappears and reappears as I wander the map
 
-*Third run*:  3/5
+*Third run*:  0/5
 
-- Both mouse axii are inverted. WASD is okay
+- All black. Nothing happens when I click "Play"
 
 ## minimax-m2 from OpenRouter API
 
-*First run*: 3/5
+*First run*: 1/5
 
-- A-D is inverted
-- Mouse' vertical movement matches to rotation around one of horizontal world axis
-- Allows to clip through a wall until you release one of movement button. Then slides you back if you are inside a wall.
+- No laser
+- Mirrors are not toggleable
+- In code : it forgot to copy String.raw template literal of the string.
 
-*Second run*: 2/5
+*Second run*: 1/5
 
-- Mouse' vertical movement matches to rotation around one of horizontal world axis
-- Upon realease of a mouse button, rotation jumps to some other state.
+- No laser
+- No mirrors
+- Some wall are out of place 
+- In code : it forgot to copy String.raw template literal of the string.
 
-*Third run*:  5/5
+*Third run*:  1/5
 
-- unlike other models, does not captures the mouse cursor (but it is not in the prompt)
+- One-sided mirrors
+- No laser
+- In code : it forgot to copy String.raw template literal of the string.
 
 
 ## kimi-k2-thinking from OpenRouter API
 
-*First run*: 3/5
+*First run*: 0/5
 
-- W-S controls are weird. As if the AI mistakingly multiplies player's angle by 2 (or 0.5) somewhere
+- No changes
 
-*Second run*: 3/5
+*Second run*: 1/5
 
-- no wall clipping
+- No laser
+- Single sided mirrors
 
-*Third run*:  /5
+*Third run*:  0/5
 
-- W-S is inverted
-- Mouse' vertical movement matches to rotation around one of horizontal world axis
+- No laser
+- No mirrors
 
 

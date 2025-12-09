@@ -222,7 +222,7 @@ Deepseek explores contents of the folder where opencode is running from. I notic
 
 - no wall clipping
 
-*Third run*:  /5
+*Third run*:  3/5
 
 - W-S is inverted
 - Mouse' vertical movement matches to rotation around one of horizontal world axis

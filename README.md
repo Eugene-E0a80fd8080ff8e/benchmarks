@@ -25,5 +25,5 @@ One of the working solutions:  TBD
 
 ### 2-1-mirrors--short-prompt
 
-Almost the same as previous "2-mirrors" , but prompt is shortened to look more natural.
-Shortened prompt also gives AI more freedom.
+Almost the same prompt as the previous "2-mirrors", but shorter.
+Shortened prompt gives AI more freedom but less guidance.
