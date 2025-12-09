@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mirrors in a Labyrinth</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        canvas { display: block; }
+        #instructions {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 24px;
+            text-align: center;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 20px;
+            border-radius: 10px;
+        }
+        #game-over {
+            display: none;
+            position: absolute;
+            top: 40%;
+            left: 50%;
+            transform: translated(-50%, -50%);
+            color: #0f0;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 48px;
+            text-shadow: 0 0 10px #0f0;
+            background: rgba(0,0,0,0.9);
+            padding: 20px;
+            border: 2px solid #0f0;
+            z-index: 100;
+        }
+        #hud {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 20px;
+            pointer-events: none;
+            text-shadow: 1px 1px 2px black;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+</head>
+<body>
+    <div id="instructions">Click to Play<br>(WASD to Move, Mouse to Look)<br>E to Rotate Mirrors</div>
+    <div id="game-over">PUZZLE SOLVED!</div>
+    <div id="hud"></div>
+
+    <script>
+        // --- 1. Map Data ---
+        const worldmap =
+String.raw`XXXXXXXXXXXXXXXX
+X..............X
+X.../.......\..X
+X..............X
+XX......X......X
+X+../...X......X
+XX......X......X
+X..............X
+X......./.../..X
+X..............X
+X..............X
+X...\...\......X
+X..XXXXXXX.....X
+X.s............X
+X..............X
+XXXXXXXXXXXX*XXX`;
+
+        // --- 2. Constants & Globals ---
+        const BLOCK_SIZE = 1;
+        const PLAYER_HEIGHT = 1.7;
+        const MOVEMENT_SPEED = 5.0;
+        const PLAYER_RADIUS = 0.3;
+        const INTERACTION_DIST = 2.0;
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        
+        const walls = [];
+        const mirrors = []; // { x, z, mesh, type: '/' | '\' }
+        let startPos = { x: 0, z: 0 };
+        let laserSource = null;
+        let targetPos = null;
+        let laserMesh = null;
+        
+        let highlightedMirror = null;
+
+        // Input State
+        const keys = {
+            forward: false,
+            backward: false,
+            left: false,
+            right: false,
+            action: false
+        };
+
+        // --- 3. Initialization ---
+        function init() {
+            // Setup Renderer
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+            
+            // Setup Scene
+            scene.background = new THREE.Color(0x111111);
+            scene.fog = new THREE.Fog(0x111111, 0, 25);
+
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+            scene.add(ambientLight);
+            
+            // Directional Light
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+            dirLight.position.set(5, 10, 7);
+            scene.add(dirLight);
+
+            // Additional Point Light for player area
+            const pointLight = new THREE.PointLight(0xffffff, 0.5, 10);
+            camera.add(pointLight); // Add light to camera so it follows player
+            scene.add(camera);
+
+            // Materials
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0x555555, roughness: 0.8 });
+            const floorMat = new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.8 });
+            const mirrorMat = new THREE.MeshStandardMaterial({ 
+                color: 0xaaaaaa, 
+                metalness: 0.9, 
+                roughness: 0.1,
+                side: THREE.DoubleSide
+            });
+            const highlightMat = new THREE.MeshStandardMaterial({ 
+                color: 0xffff00, 
+                metalness: 0.5, 
+                roughness: 0.5,
+                side: THREE.DoubleSide,
+                emissive: 0x333300
+            });
+            const targetMat = new THREE.MeshStandardMaterial({ color: 0xff00ff, emissive: 0x330033 });
+            const laserSourceMat = new THREE.MeshStandardMaterial({ color: 0xff0000 });
+
+            // Geometries
+            const boxGeo = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+            const floorGeo = new THREE.PlaneGeometry(BLOCK_SIZE, BLOCK_SIZE);
+            const mirrorGeo = new THREE.BoxGeometry(BLOCK_SIZE * 0.8, BLOCK_SIZE * 0.8, 0.05); // Thin plate
+
+            // Parse Map
+            const rows = worldmap.split('\n');
+            const height = rows.length;
+            const width = rows[0].length;
+
+            // Generate Floor everywhere (simple large plane or per tile)
+            // Let's do a large floor plane for simplicity
+            const largeFloorGeo = new THREE.PlaneGeometry(width * BLOCK_SIZE, height * BLOCK_SIZE);
+            const floorMesh = new THREE.Mesh(largeFloorGeo, floorMat);
+            floorMesh.rotation.x = -Math.PI / 2;
+            floorMesh.position.set( (width * BLOCK_SIZE) / 2 - 0.5, 0, (height * BLOCK_SIZE) / 2 - 0.5 );
+            scene.add(floorMesh);
+
+            for (let z = 0; z < height; z++) {
+                // Fix: Trim row to avoid issues with extra chars, though prompt uses clean raw string
+                const row = rows[z].trim();
+                for (let x = 0; x < row.length; x++) {
+                    const char = row[x];
+                    const wx = x * BLOCK_SIZE;
+                    const wz = z * BLOCK_SIZE;
+
+                    if (char === 'X' || char === '*') {
+                        const mat = char === '*' ? targetMat : wallMat;
+                        const mesh = new THREE.Mesh(boxGeo, mat);
+                        mesh.position.set(wx, BLOCK_SIZE / 2, wz);
+                        scene.add(mesh);
+                        walls.push({ x, z }); // Coordinate for collision
+                        
+                        if (char === '*') {
+                            targetPos = { x, z };
+                        }
+                    } else if (char === '+') {
+                        // Laser Source (in wall)
+                        const mesh = new THREE.Mesh(boxGeo, laserSourceMat);
+                        mesh.position.set(wx, BLOCK_SIZE / 2, wz);
+                        scene.add(mesh);
+                        walls.push({ x, z }); // It is solid
+                        laserSource = { x, z };
+                    } else if (char === '/' || char === '\\') {
+                        // Mirror
+                        const mirrorObj = new THREE.Mesh(mirrorGeo, mirrorMat);
+                        mirrorObj.position.set(wx, BLOCK_SIZE / 2, wz);
+                        // Store standard rotation + current angle
+                        mirrorObj.userData = { 
+                            baseMat: mirrorMat, 
+                            highlightMat: highlightMat,
+                            type: char 
+                        };
+                        setMirrorRotation(mirrorObj, char);
+                        scene.add(mirrorObj);
+                        mirrors.push({ x, z, mesh: mirrorObj });
+                    }
+                    
+                    if (char === 's') {
+                        startPos = { x: wx, z: wz };
+                    }
+                }
+            }
+
+            // Player Setup
+            camera.position.set(startPos.x, PLAYER_HEIGHT, startPos.z);
+            camera.rotation.order = 'YXZ';
+
+            // Events
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            window.addEventListener('resize', onResize);
+            
+            // Pointer Lock
+            const instructions = document.getElementById('instructions');
+            document.body.addEventListener('click', () => {
+                document.body.requestPointerLock();
+            });
+            document.addEventListener('pointerlockchange', () => {
+                if (document.pointerLockElement !== document.body) {
+                    instructions.style.display = 'block';
+                } else {
+                    instructions.style.display = 'none';
+                }
+            });
+            document.addEventListener('mousemove', onMouseMove);
+
+            // Initial Laser Update
+            updateLaser();
+            
+            // Start Loop
+            animate();
+        }
+
+        // --- 4. Helper Functions ---
+        
+        function setMirrorRotation(mesh, type) {
+            // '/' -> -45 deg (-PI/4). Reflects: Top <-> Left, Bottom <-> Right
+            // '\' -> +45 deg (+PI/4). Reflects: Top <-> Right, Bottom <-> Left
+            // Visual check:
+            // '/' runs Bottom-Left to Top-Right. In top-down view (XZ), that's like x=z. 45 degrees relative to X?
+            // Standard Box at 0 rot aligns with X. 
+            // Rotation Y:
+            // 0: || Z axis (Wait, BoxGeometry defaults. Width(X), Height(Y), Depth(Z)).
+            // If I want a plate: scale Z to thin. width X=0.8.
+            // At Y=0, it spans x=-0.4 to 0.4. Normal is (0,0,1).
+            // To make '\' (Top-Left to Bottom-Right): Rotate -45 deg (clockwise).
+            // To make '/' (Bottom-Left to Top-Right): Rotate +45 deg (counter-clockwise).
+            
+            // Let's refine based on reflection usage logic:
+            // type '/' uses  (dx, dz) -> (-dz, -dx)
+            // type '\' uses (dx, dz) -> (dz, dx)
+            
+            if (type === '/') {
+                mesh.rotation.y = Math.PI / 4; 
+            } else {
+                mesh.rotation.y = -Math.PI / 4;
+            }
+            // Update internal type for logic
+            mesh.userData.type = type;
+        }
+
+        function onResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        let yaw = 0;
+        let pitch = 0;
+
+        function onMouseMove(event) {
+            if (document.pointerLockElement === document.body) {
+                yaw -= event.movementX * 0.002;
+                pitch -= event.movementY * 0.002;
+                pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch));
+                camera.rotation.set(pitch, yaw, 0);
+            }
+        }
+
+        function onKeyDown(e) {
+            switch(e.code) {
+                case 'KeyW': keys.forward = true; break;
+                case 'KeyS': keys.backward = true; break;
+                case 'KeyA': keys.left = true; break;
+                case 'KeyD': keys.right = true; break;
+                case 'KeyE': 
+                    if (highlightedMirror) {
+                        toggleMirror(highlightedMirror);
+                    }
+                    break;
+            }
+        }
+
+        function onKeyUp(e) {
+            switch(e.code) {
+                case 'KeyW': keys.forward = false; break;
+                case 'KeyS': keys.backward = false; break;
+                case 'KeyA': keys.left = false; break;
+                case 'KeyD': keys.right = false; break;
+            }
+        }
+        
+        function toggleMirror(m) {
+            const mesh = m.mesh;
+            const newType = mesh.userData.type === '/' ? '\\' : '/';
+            setMirrorRotation(mesh, newType);
+            updateLaser();
+        }
+
+        // Collision
+        function checkCollision(x, z) {
+            // Simple grid based collision
+            // Check all 4 corners of player radius
+            const points = [
+                {x: x - PLAYER_RADIUS, z: z - PLAYER_RADIUS},
+                {x: x + PLAYER_RADIUS, z: z - PLAYER_RADIUS},
+                {x: x - PLAYER_RADIUS, z: z + PLAYER_RADIUS},
+                {x: x + PLAYER_RADIUS, z: z + PLAYER_RADIUS}
+            ];
+            
+            for(let p of points) {
+                const gx = Math.round(p.x);
+                const gz = Math.round(p.z);
+                // Check walls
+                if (walls.some(w => w.x === gx && w.z === gz)) return true;
+                // Check mirrors (solid?) - Prompt implies user interacts, usually they are obstacles.
+                // Let's make mirrors solid.
+                if (mirrors.some(m => m.x === gx && m.z === gz)) return true;
+            }
+            return false;
+        }
+
+        // Laser Logic
+        function updateLaser() {
+            if (!laserSource) return;
+
+            // Remove old laser
+            if (laserMesh) {
+                scene.remove(laserMesh);
+                if (laserMesh.geometry) laserMesh.geometry.dispose();
+            }
+
+            const points = [];
+            
+            // Determine start direction. Source is at (sx, sz). 
+            // Neighbors?
+            const sx = laserSource.x;
+            const sz = laserSource.z;
+            points.push(new THREE.Vector3(sx, BLOCK_SIZE/2, sz));
+            
+            // Find which neighbor is empty to shoot laser into
+            let dx = 0, dz = 0;
+            const rows = worldmap.split('\n'); // Need map access. Can use global 'mirrors' and 'walls' but text map is easier for emptiness.
+            // Or just check if neighbor is NOT a wall?
+            // Map data clean up for looking up
+            const mapArr = rows.map(r => r.trim());
+            
+            // Check neighbors (Right, Left, Down, Up)
+            // Prioritize explicit direction logic or simple neighbor check
+            if (mapArr[sz][sx+1] !== 'X') { dx = 1; }
+            else if (mapArr[sz][sx-1] !== 'X') { dx = -1; }
+            else if (mapArr[sz+1] && mapArr[sz+1][sx] !== 'X') { dz = 1; }
+            else if (mapArr[sz-1] && mapArr[sz-1][sx] !== 'X') { dz = -1; }
+            
+            // Trace
+            let cx = sx;
+            let cz = sz;
+            let step = 0;
+            let hitTarget = false;
+            
+            while (step < 100) { // Max steps safe guard
+                // Move half step to exit current cell? No, we move from center to center logic
+                // But visualization needs lines between centers.
+                
+                cx += dx;
+                cz += dz;
+                points.push(new THREE.Vector3(cx, BLOCK_SIZE/2, cz));
+                
+                // Check what's at (cx, cz)
+                // 1. Target
+                if (targetPos && cx === targetPos.x && cz === targetPos.z) {
+                    hitTarget = true;
+                    break;
+                }
+                
+                // 2. Wall
+                if (walls.some(w => w.x === cx && w.z === cz)) {
+                    // Stop at wall center (already added point)
+                    break;
+                }
+                
+                // 3. Mirror
+                const mir = mirrors.find(m => m.x === cx && m.z === cz);
+                if (mir) {
+                    const type = mir.mesh.userData.type;
+                    let ndx=0, ndz=0;
+                    if (type === '/') {
+                        // (1, 0) -> (0, -1)  | Right -> Up (Screen Up is -Z)
+                        // (-1, 0) -> (0, 1)  | Left -> Down
+                        // (0, 1) -> (-1, 0)  | Down -> Left
+                        // (0, -1) -> (1, 0)  | Up -> Right
+                        ndx = -dz;
+                        ndz = -dx;
+                    } else { // type '\'
+                        // (1, 0) -> (0, 1)   | Right -> Down
+                        // (-1, 0) -> (0, -1) | Left -> Up
+                        // (0, 1) -> (1, 0)   | Down -> Right
+                        // (0, -1) -> (-1, 0) | Up -> Left
+                        ndx = dz;
+                        ndz = dx;
+                    }
+                    dx = ndx;
+                    dz = ndz;
+                }
+                
+                step++;
+            }
+            
+            // Build Line
+            const geo = new THREE.BufferGeometry().setFromPoints(points);
+            const mat = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 3 });
+            laserMesh = new THREE.Line(geo, mat);
+            scene.add(laserMesh);
+            
+            if (hitTarget) {
+                document.getElementById('game-over').style.display = 'block';
+            }
+        }
+
+        // --- 5. Game Loop ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = clock.getDelta();
+            
+            // WASD Movement
+            if (document.pointerLockElement === document.body) {
+                const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+                const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+                const speed = MOVEMENT_SPEED * delta;
+                
+                let moveX = 0;
+                let moveZ = 0;
+                
+                if (keys.forward) { moveX += forward.x * speed; moveZ += forward.z * speed; }
+                if (keys.backward) { moveX -= forward.x * speed; moveZ -= forward.z * speed; }
+                if (keys.right) { moveX += right.x * speed; moveZ += right.z * speed; }
+                if (keys.left) { moveX -= right.x * speed; moveZ -= right.z * speed; }
+
+                if (!checkCollision(camera.position.x + moveX, camera.position.z)) {
+                    camera.position.x += moveX;
+                }
+                if (!checkCollision(camera.position.x, camera.position.z + moveZ)) {
+                    camera.position.z += moveZ;
+                }
+            }
+            
+            // Mirror Interaction Check
+            let closest = null;
+            let minDst = INTERACTION_DIST;
+            
+            for (let m of mirrors) {
+                const dst = Math.sqrt(
+                    Math.pow(camera.position.x - m.x, 2) + 
+                    Math.pow(camera.position.z - m.z, 2)
+                );
+                if (dst < minDst) {
+                    minDst = dst;
+                    closest = m;
+                }
+            }
+            
+            // Handle Highlight
+            if (closest !== highlightedMirror) {
+                if (highlightedMirror) {
+                    highlightedMirror.mesh.material = highlightedMirror.mesh.userData.baseMat;
+                }
+                highlightedMirror = closest;
+                if (highlightedMirror) {
+                    highlightedMirror.mesh.material = highlightedMirror.mesh.userData.highlightMat;
+                }
+            }
+            
+            // HUD
+            const hud = document.getElementById('hud');
+            if (highlightedMirror) { // Show prompt if close enough
+                 hud.innerText = "Press E to Interact";
+            } else {
+                 hud.innerText = "";
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>

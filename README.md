@@ -17,6 +17,13 @@ Dec 8, 2025.
 
 Make a mirrors-in-a-maze puzzle. ([full prompt](./2-mirrors/_prompt.txt))
 
+Very detailed prompt, which I created iteratively, running against different models.
+
 One of the working solutions:  TBD
 
 [Full report](./2-mirrors.md)
+
+### 2-1-mirrors--short-prompt
+
+Almost the same as previous "2-mirrors" , but prompt is shortened to look more natural.
+Shortened prompt also gives AI more freedom.

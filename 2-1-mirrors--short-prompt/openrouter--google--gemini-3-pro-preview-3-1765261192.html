@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mirrors in a Labyrinth</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        canvas { display: block; }
+        #instructions {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 24px;
+            text-align: center;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 20px;
+            border-radius: 10px;
+        }
+        #message {
+            position: absolute;
+            top: 20%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: lime;
+            font-family: Arial, sans-serif;
+            font-size: 48px;
+            font-weight: bold;
+            text-align: center;
+            display: none;
+            text-shadow: 0 0 10px lime;
+            pointer-events: none;
+        }
+        #interaction {
+            position: absolute;
+            bottom: 20%;
+            width: 100%;
+            text-align: center;
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 20px;
+            display: none;
+            pointer-events: none;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+</head>
+<body>
+    <div id="instructions">Click to Play<br>(WASD to Move, Mouse to Look)<br>(E to Interact with Mirrors)</div>
+    <div id="message">PUZZLE SOLVED!</div>
+    <div id="interaction">Press E to Rotate Mirror</div>
+    <script>
+        // Game Constants
+        const BLOCK_SIZE = 1;
+        const PLAYER_HEIGHT = 1.7;
+        const MOVEMENT_SPEED = 5.0;
+        const PLAYER_RADIUS = 0.3;
+
+        // Map Data
+        const mapString = String.raw`XXXXXXXXXXXXXXXX
+X..............X
+X.../.......\..X
+X..............X
+XX......X......X
+X+../...X......X
+XX......X......X
+X..............X
+X......./.../..X
+X..............X
+X..............X
+X...\...\......X
+X..XXXXXXX.....X
+X.s............X
+X..............X
+XXXXXXXXXXXX*XXX`.trim();
+
+        const mapData = mapString.split('\n').map(row => row.split(''));
+        const mapWidth = mapData[0].length;
+        const mapHeight = mapData.length;
+
+        // Three.js Setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111111);
+        scene.fog = new THREE.Fog(0x111111, 0, 20);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+
+        // Materials
+        const wallMaterial = new THREE.MeshLambertMaterial({ color: 0x444444 });
+        const floorMaterial = new THREE.MeshLambertMaterial({ color: 0x222222 });
+        const mirrorMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0x88CCFF, 
+            shininess: 100,
+            specular: 0x111111,
+            side: THREE.DoubleSide
+        });
+        const mirrorHighlightMaterial = new THREE.MeshPhongMaterial({ 
+            color: 0xFFFFFF, 
+            emissive: 0x333333,
+            shininess: 100,
+            side: THREE.DoubleSide
+        });
+        const sourceMaterial = new THREE.MeshLambertMaterial({ color: 0xFF0000, emissive: 0x500000 });
+        const targetMaterial = new THREE.MeshLambertMaterial({ color: 0xFFFF00 });
+
+        // Geometry
+        const boxGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+        const mirrorGeometry = new THREE.BoxGeometry(0.1, 0.8 * BLOCK_SIZE, 0.8 * BLOCK_SIZE);
+        const floorGeometry = new THREE.PlaneGeometry(mapWidth * BLOCK_SIZE, mapHeight * BLOCK_SIZE);
+
+        // Floor
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.set((mapWidth * BLOCK_SIZE) / 2 - 0.5, 0, (mapHeight * BLOCK_SIZE) / 2 - 0.5);
+        scene.add(floor);
+
+        // Game Objects
+        const walls = [];
+        const mirrors = [];
+        let startPos = { x: 0, z: 0 };
+        let laserSource = null;
+        let target = null;
+
+        // Build Level
+        for (let z = 0; z < mapHeight; z++) {
+            for (let x = 0; x < mapWidth; x++) {
+                const char = mapData[z][x];
+                const posX = x * BLOCK_SIZE;
+                const posZ = z * BLOCK_SIZE;
+                const worldPos = new THREE.Vector3(posX, BLOCK_SIZE / 2, posZ);
+
+                if (char === 'X') {
+                    const wall = new THREE.Mesh(boxGeometry, wallMaterial);
+                    wall.position.copy(worldPos);
+                    scene.add(wall);
+                    walls.push(wall);
+                } else if (char === 's') {
+                    startPos = { x: posX, z: posZ };
+                } else if (char === '+') {
+                    // Laser Source (also acts as wall)
+                    const source = new THREE.Mesh(boxGeometry, sourceMaterial);
+                    source.position.copy(worldPos);
+                    scene.add(source);
+                    walls.push(source); // Collision
+                    
+                    // Determine direction
+                    let dir = new THREE.Vector3(0, 0, 0);
+                    // Check neighbors to find empty space to shoot into
+                    if (x < mapWidth - 1 && mapData[z][x+1] !== 'X' && mapData[z][x+1] !== '+') dir.set(1, 0, 0); // East
+                    else if (x > 0 && mapData[z][x-1] !== 'X' && mapData[z][x-1] !== '+') dir.set(-1, 0, 0); // West
+                    else if (z < mapHeight - 1 && mapData[z+1][x] !== 'X' && mapData[z+1][x] !== '+') dir.set(0, 0, 1); // South
+                    else if (z > 0 && mapData[z-1][x] !== 'X' && mapData[z-1][x] !== '+') dir.set(0, 0, -1); // North
+
+                    laserSource = { position: worldPos.clone(), direction: dir };
+
+                } else if (char === '/') {
+                    const mirror = new THREE.Mesh(mirrorGeometry, mirrorMaterial.clone());
+                    mirror.position.set(posX, BLOCK_SIZE / 2, posZ);
+                    // -45 degrees (around Y)
+                    mirror.rotation.y = -Math.PI / 4;
+                    scene.add(mirror);
+                    mirrors.push(mirror);
+                    // Add collider or use bounding box for raycast?
+                    // We'll use raycast against mesh for laser, and simple distance for interaction
+                } else if (char === '\\') {
+                    const mirror = new THREE.Mesh(mirrorGeometry, mirrorMaterial.clone());
+                    mirror.position.set(posX, BLOCK_SIZE / 2, posZ);
+                    // +45 degrees
+                    mirror.rotation.y = Math.PI / 4;
+                    scene.add(mirror);
+                    mirrors.push(mirror);
+                } else if (char === '*') {
+                    target = new THREE.Mesh(boxGeometry, targetMaterial);
+                    target.position.copy(worldPos);
+                    scene.add(target);
+                    // Note: Target might be inside a wall block area in the map, so collision?
+                    // The map seems to put '*' in a wall row.
+                    // Let's assume it replaces the wall collision-wise unless we want it walkable.
+                    // Given it's a target for laser, usually it's a solid object.
+                    walls.push(target);
+                }
+            }
+        }
+
+        // Initialize Player
+        camera.position.set(startPos.x, PLAYER_HEIGHT, startPos.z);
+        camera.rotation.order = 'YXZ';
+        let pitch = 0;
+        let yaw = 0;
+
+        // Laser System
+        const MAX_BOUNCES = 20;
+        const laserMaterial = new THREE.LineBasicMaterial({ color: 0xFF0000, linewidth: 2 });
+        let laserObject = null;
+        let gameSolved = false;
+        
+        const raycaster = new THREE.Raycaster();
+
+        function updateLaser() {
+            if (!laserSource || gameSolved) return;
+
+            const points = [];
+            let origin = laserSource.position.clone();
+            let direction = laserSource.direction.clone();
+            
+            // Offset origin slightly out of the source block to avoid self-collision
+            origin.add(direction.clone().multiplyScalar(0.51));
+
+            points.push(origin.clone());
+
+            let finished = false;
+            let bounces = 0;
+
+            while (!finished && bounces < MAX_BOUNCES) {
+                raycaster.set(origin, direction);
+                
+                // Objects to intersect: Walls, Mirrors, Target
+                const interactables = [...walls, ...mirrors];
+                // Note: Scene.children includes floor, lights, etc. Better to use specific list or filter.
+                // But walls and mirrors are updated lists.
+                
+                const intersects = raycaster.intersectObjects(interactables, false);
+
+                if (intersects.length > 0) {
+                    const hit = intersects[0];
+                    points.push(hit.point);
+                    
+                    if (hit.object === target) {
+                        gameSolved = true;
+                        document.getElementById('message').style.display = 'block';
+                        document.getElementById('message').innerText = "PUZZLE SOLVED!";
+                        finished = true;
+                    } else if (mirrors.includes(hit.object)) {
+                        // Reflect
+                        // r = d - 2(d.n)n
+                        const n = hit.face.normal.clone().applyEuler(hit.object.rotation).normalize();
+                         // Note: hit.face.normal is in object space? No, raycaster returns world space normal?
+                         // Three.js Raycaster documentation: ".face is the face of the geometry... .face.normal is the normal vector of the face."
+                         // Wait, face normal is usually local space in Geometry, but Raycaster might transform it?
+                         // "The face normal is not transformed... " -> We need to transform it.
+                         // But wait, Three.js `raycaster.intersectObject` -> `hit.face.normal` is in LOCAL space for geometry?
+                         // Actually, standard usually requires strict check.
+                         // Let's rely on math reflection vector calculation if normals are tricky,
+                         // but standard approach: v.reflect(normal).
+                         // We need world normal.
+                         // WorldNormal = normal.applyNormalMatrix( new THREE.Matrix3().getNormalMatrix( object.matrixWorld ) )
+                         
+                         const normalMatrix = new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld);
+                         const worldNormal = hit.face.normal.clone().applyMatrix3(normalMatrix).normalize();
+
+                         direction.reflect(worldNormal);
+                         
+                         // Move origin to hit point + epsilon
+                         origin = hit.point.clone().add(direction.clone().multiplyScalar(0.01));
+                         bounces++;
+                    } else {
+                        // Wall
+                        finished = true;
+                    }
+                } else {
+                    // Went into void (should not happen in closed room)
+                    const farPoint = origin.clone().add(direction.clone().multiplyScalar(100));
+                    points.push(farPoint);
+                    finished = true;
+                }
+            }
+
+            // Draw Line
+            if (laserObject) scene.remove(laserObject);
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            laserObject = new THREE.Line(geometry, laserMaterial);
+            scene.add(laserObject);
+        }
+
+        // Input Handling
+        const keys = { forward: false, backward: false, left: false, right: false };
+
+        document.addEventListener('keydown', (e) => {
+            switch(e.code) {
+                case 'KeyW': keys.forward = true; break;
+                case 'KeyA': keys.left = true; break;
+                case 'KeyS': keys.backward = true; break;
+                case 'KeyD': keys.right = true; break;
+                case 'KeyE': interact(); break;
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            switch(e.code) {
+                case 'KeyW': keys.forward = false; break;
+                case 'KeyA': keys.left = false; break;
+                case 'KeyS': keys.backward = false; break;
+                case 'KeyD': keys.right = false; break;
+            }
+        });
+
+        // Mouse Look
+        const instructions = document.getElementById('instructions');
+        let isLocked = false;
+        document.body.addEventListener('click', () => { if (!isLocked) document.body.requestPointerLock(); });
+        document.addEventListener('pointerlockchange', () => {
+             isLocked = (document.pointerLockElement === document.body);
+             instructions.style.display = isLocked ? 'none' : 'block';
+        });
+        document.addEventListener('mousemove', (e) => {
+            if (isLocked) {
+                yaw -= e.movementX * 0.002;
+                pitch -= e.movementY * 0.002;
+                pitch = Math.max(-Math.PI/2 + 0.1, Math.min(Math.PI/2 - 0.1, pitch));
+                camera.rotation.set(pitch, yaw, 0);
+            }
+        });
+
+        // Interaction
+        let highlightedMirror = null;
+        const INTERACT_DIST = 2.0;
+        const interactionUI = document.getElementById('interaction');
+
+        function checkInteraction() {
+            // Find closest mirror
+            let closest = null;
+            let minDist = INTERACT_DIST;
+
+            mirrors.forEach(mirror => {
+                const dist = camera.position.distanceTo(mirror.position);
+                if (dist < minDist) {
+                    minDist = dist;
+                    closest = mirror;
+                }
+            });
+
+            if (closest !== highlightedMirror) {
+                if (highlightedMirror) highlightedMirror.material = mirrorMaterial;
+                highlightedMirror = closest;
+                if (highlightedMirror) highlightedMirror.material = mirrorHighlightMaterial;
+            }
+
+            interactionUI.style.display = highlightedMirror ? 'block' : 'none';
+        }
+
+        function interact() {
+            if (highlightedMirror && !gameSolved) {
+                highlightedMirror.rotation.y += Math.PI / 2;
+                // Normalize rotation? Not strictly needed for logic, visual is fine.
+                // Re-run laser
+                // (Laser updates effectively every frame or we can trigger it)
+            }
+        }
+
+        // Movement Logic
+        function checkCollision(x, z) {
+            const gridX = Math.round(x);
+            const gridZ = Math.round(z);
+            if (gridZ >= 0 && gridZ < mapHeight && gridX >= 0 && gridX < mapWidth) {
+                if (mapData[gridZ][gridX] === 'X' || mapData[gridZ][gridX] === '+' || mapData[gridZ][gridX] === '*') return true;
+                // Mirrors? Map has them as / or \. They are in center.
+                // Player radius is 0.3. Mirror is thin.
+                // Let's check pure grid collision for simplicity for now.
+                // Mirrors are objects in the center of the cell.
+                // If we walk into a mirror cell, we might clip through the mirror mesh if we don't collide with it.
+                // Let's add collision for mirrors too.
+                if (mapData[gridZ][gridX] === '/' || mapData[gridZ][gridX] === '\\') {
+                    // Simple box check?
+                    // Mirror is at center. Distance check?
+                    const dx = x - gridX * BLOCK_SIZE;
+                    const dz = z - gridZ * BLOCK_SIZE;
+                    // if (dx*dx + dz*dz < 0.2) return true; 
+                    // Let's allow walking "near" it but not through.
+                    // For now, treat mirror cell as Walkable but collision with mesh?
+                    // To keep it simple: Treat mirror cell as blocked? No, we need to get close to interact.
+                    // Let's allow entering the cell, but avoid the center.
+                }
+            }
+            return false;
+        }
+        
+        // Better Collision (Wall Sliding Support)
+        function tryMove(newPos) {
+            // Check corners
+            const margin = PLAYER_RADIUS;
+            const checks = [
+                {x: newPos.x - margin, z: newPos.z - margin},
+                {x: newPos.x + margin, z: newPos.z - margin},
+                {x: newPos.x - margin, z: newPos.z + margin},
+                {x: newPos.x + margin, z: newPos.z + margin}
+            ];
+            
+            for (let p of checks) {
+                const gx = Math.round(p.x / BLOCK_SIZE);
+                const gz = Math.round(p.z / BLOCK_SIZE);
+                
+                // Walls
+                if (walls.some(w => Math.round(w.position.x) === gx && Math.round(w.position.z) === gz)) return false;
+            }
+            return true;
+        }
+
+        // Loop
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = clock.getDelta();
+            
+            if (isLocked) {
+                const speed = MOVEMENT_SPEED * delta;
+                const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+                const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+
+                let move = new THREE.Vector3(0, 0, 0);
+                if (keys.forward) move.add(forward);
+                if (keys.backward) move.sub(forward);
+                if (keys.right) move.add(right);
+                if (keys.left) move.sub(right);
+                
+                if (move.lengthSq() > 0) {
+                    move.normalize().multiplyScalar(speed);
+                    
+                    // X Movement
+                    let newPos = camera.position.clone();
+                    newPos.x += move.x;
+                    if (tryMove(newPos)) camera.position.x = newPos.x;
+                    
+                    // Z Movement
+                    newPos = camera.position.clone();
+                    newPos.z += move.z;
+                    if (tryMove(newPos)) camera.position.z = newPos.z;
+                }
+                
+                checkInteraction();
+            }
+
+            // Update Laser every frame to handle rotation animations smoothly if we added them (instance jump is fine though)
+            updateLaser();
+            
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        // Resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>

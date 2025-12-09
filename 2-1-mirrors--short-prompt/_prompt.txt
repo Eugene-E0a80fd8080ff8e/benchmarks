@@ -1,0 +1,50 @@
+
+Edit the file 'labyrinth.html' to create  "Mirrors in a labyrinth game".
+
+---
+
+# Mirrors in a labyrinth game
+
+Update the map to the new one:
+```javascript
+const worldmap =
+String.raw`XXXXXXXXXXXXXXXX
+X..............X
+X.../.......\..X
+X..............X
+XX......X......X
+X+../...X......X
+XX......X......X
+X..............X
+X......./.../..X
+X..............X
+X..............X
+X...\...\......X
+X..XXXXXXX.....X
+X.s............X
+X..............X
+XXXXXXXXXXXX*XXX`;
+```
+
+"X" - wall block. Its size is 1x1x1 meters.
+
+"." - empty space.
+
+"+" - the place in the wall, where the laser is shining from.
+
+"/" and "\" - those are mirrors in two different states. Mirrors are installed in 45 or -45 degrees so that they change direction of the laser by 90 degrees.
+45 and -45 are two states or the mirror. User can interact with mirrors and change its states.
+
+
+If there is a mirror in front of the user, closer than 2 meters, it should get highlighted.
+
+Once mirror is highlighted, the user may press the action button "E" to toggle mirror's state. 
+
+Mirrors should look like mirrors.
+
+"*" - this is the target for the light. When the laser shines into it, the user have solved the puzzle, the game is over. Let user know about it.
+
+The laser should be a visible line.
+
+"s" - starting point, where the player should spawned at the beginning.
+

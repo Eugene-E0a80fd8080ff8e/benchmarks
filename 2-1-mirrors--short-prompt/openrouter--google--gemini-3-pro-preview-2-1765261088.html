@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mirrors in a Labyrinth</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        canvas { display: block; }
+        #ui {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: #0f0;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 20px;
+            pointer-events: none;
+            text-shadow: 1px 1px 2px black;
+        }
+        #center-marker {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 4px;
+            height: 4px;
+            background: white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            opacity: 0.5;
+        }
+        #message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #fff;
+            font-family: Arial, sans-serif;
+            font-size: 48px;
+            font-weight: bold;
+            text-shadow: 0 0 10px #fff, 0 0 20px #0ff;
+            display: none;
+            pointer-events: none;
+            text-align: center;
+        }
+        #instructions {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            color: #aaa;
+            font-family: sans-serif;
+            pointer-events: none;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+</head>
+<body>
+    <div id="ui">Click to Start<br>WASD to Move<br>E to Interact</div>
+    <div id="center-marker"></div>
+    <div id="message"></div>
+    <div id="instructions">Align mirrors to guide the laser to the target (*)</div>
+
+    <script>
+        // --- 1. Map Data ---
+        const mapString = String.raw`XXXXXXXXXXXXXXXX
+X..............X
+X.../.......\..X
+X..............X
+XX......X......X
+X+../...X......X
+XX......X......X
+X..............X
+X......./.../..X
+X..............X
+X..............X
+X...\...\......X
+X..XXXXXXX.....X
+X.s............X
+X..............X
+XXXXXXXXXXXX*XXX`;
+
+        // Parse Map
+        // Remove first newline if present and split
+        const rows = mapString.trim().split('\n');
+        const mapHeight = rows.length;
+        const mapWidth = rows[0].length;
+        const mapData = rows.map(r => r.split(''));
+
+        // Game Constants
+        const BLOCK_SIZE = 1;
+        const PLAYER_HEIGHT = 1.7;
+        const MOVEMENT_SPEED = 5.0;
+        const PLAYER_RADIUS = 0.3;
+
+        // Entities
+        let mirrors = []; // { x, z, type: '/' or '\', mesh }
+        let laserSource = null; // { x, z }
+        let targetPos = null; // { x, z }
+        let playerStart = { x: 1, z: 1 };
+        let laserPathLine = null;
+        let highlightedMirror = null;
+        let gameWon = false;
+
+        // Three.js Setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x111111);
+        scene.fog = new THREE.Fog(0x111111, 0, 15);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+
+        // Materials
+        const wallMat = new THREE.MeshLambertMaterial({ color: 0x444444 });
+        const floorMat = new THREE.MeshLambertMaterial({ color: 0x222222 });
+        const mirrorMat = new THREE.MeshPhongMaterial({ 
+            color: 0x88ccff, 
+            shininess: 100,
+            specular: 0xffffff,
+            side: THREE.DoubleSide
+        });
+        const mirrorFrameMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+        const sourceMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+        const targetMat = new THREE.MeshLambertMaterial({ color: 0xffd700, emissive: 0x333300 });
+
+        // Geometry
+        const boxGeo = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+        const floorGeo = new THREE.PlaneGeometry(mapWidth * BLOCK_SIZE, mapHeight * BLOCK_SIZE);
+
+        // --- 2. Build World ---
+        
+        // Floor
+        const floor = new THREE.Mesh(floorGeo, floorMat);
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.set((mapWidth * BLOCK_SIZE)/2 - 0.5, 0, (mapHeight * BLOCK_SIZE)/2 - 0.5);
+        scene.add(floor);
+
+        // Iterate Map
+        for (let z = 0; z < mapHeight; z++) {
+            for (let x = 0; x < mapWidth; x++) {
+                const char = mapData[z][x];
+                const px = x * BLOCK_SIZE;
+                const pz = z * BLOCK_SIZE;
+
+                if (char === 'X') {
+                    const wall = new THREE.Mesh(boxGeo, wallMat);
+                    wall.position.set(px, BLOCK_SIZE/2, pz);
+                    scene.add(wall);
+                } else if (char === '+') {
+                    // Laser Source (Wall appearance but special)
+                    const wall = new THREE.Mesh(boxGeo, wallMat);
+                    wall.position.set(px, BLOCK_SIZE/2, pz);
+                    scene.add(wall);
+                    
+                    // Add marker
+                    const marker = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.2, 0.2), sourceMat);
+                    marker.position.set(px, BLOCK_SIZE/2, pz); // Will adjust to face out later or just sit inside
+                    scene.add(marker);
+                    
+                    laserSource = { x: x, z: z };
+                } else if (char === '/') {
+                    createMirror(x, z, '/');
+                } else if (char === '\\') {
+                    createMirror(x, z, '\\');
+                } else if (char === '*') {
+                    const target = new THREE.Mesh(boxGeo, targetMat);
+                    target.position.set(px, BLOCK_SIZE/2, pz);
+                    scene.add(target);
+                    // Add a point light
+                    const pl = new THREE.PointLight(0xffd700, 1, 3);
+                    pl.position.set(px, BLOCK_SIZE/2, pz);
+                    scene.add(pl);
+                    targetPos = { x: x, z: z };
+                } else if (char === 's') {
+                    playerStart = { x: px, z: pz };
+                }
+            }
+        }
+
+        function createMirror(x, z, type) {
+            const group = new THREE.Group();
+            group.position.set(x * BLOCK_SIZE, BLOCK_SIZE/2, z * BLOCK_SIZE);
+            
+            // Frame
+            const frame = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.9, 0.1), mirrorFrameMat);
+            group.add(frame);
+            
+            // Glass surface
+            const glass = new THREE.Mesh(new THREE.PlaneGeometry(0.7, 0.8), mirrorMat);
+            glass.position.z = 0.06;
+            group.add(glass);
+            
+            // Back glass
+            const glassBack = glass.clone();
+            glassBack.rotation.y = Math.PI;
+            glassBack.position.z = -0.06;
+            group.add(glassBack);
+
+            // Rotate based on type
+            // / : 45 deg (South-West to North-East)
+            // \ : -45 deg (South-East to North-West)
+            // Visually: 
+            // /  Look at keypad: 1 to 9. Angle is +45 deg if 0 is East? No.
+            // Let's assume Top is -Z (North).
+            // Default plane faces +Z (South).
+            // Rotating +45 (CCW) around Y axis:
+            // Faces South-East. Normal (1, 0, 1). 
+            // Wait, / usually means bottom-left to top-right.
+            // If we view map 2D:
+            // ^ -Z
+            // |
+            // --> +X
+            // / looks like x= -z. Normal approx (-1, 0, -1).
+            // Let's just set initial rotations and toggle updates.
+            setMirrorRotation(group, type);
+
+            scene.add(group);
+            mirrors.push({ x, z, type, mesh: group });
+        }
+
+        function setMirrorRotation(group, type) {
+            // Visual rotation
+            // We want the plane to align with the diagonal.
+            // Basic plane is flat on XY? No, vertical on XY? PlaneGeometry is X,Y.
+            // So its normal is Z.
+            // If type is '/', line goes (0,1) to (1,0) in grid coords? 
+            // No, / is usually (0,1) to (1,0) is \. (0,0) to (1,1) is /.
+            // (0,0) is Top-Left visually in text editor? 
+            // Text: Row 0 is Top.
+            // / : joins (x, z+1) to (x+1, z)? -> bottom-left to top-right.
+            // Angle: -45 deg (if 0 is East, -90 is North).
+            
+            // Let's stick to the prompt's simplicity: "45 or -45 degrees".
+            // We align the plane geometry along the diagonal.
+            // Normal plane faces Z.
+            // Rotate Y by 45deg: Faces South-East. Plane runs SW to NE. This is /.
+            // Rotate Y by -45deg: Faces South-West. Plane runs SE to NW. This is \.
+            
+            if (type === '/') {
+                group.rotation.y = Math.PI / 4; 
+            } else {
+                group.rotation.y = -Math.PI / 4;
+            }
+        }
+
+        // Camera setup
+        camera.position.set(playerStart.x, PLAYER_HEIGHT, playerStart.z);
+        camera.rotation.order = 'YXZ';
+        
+        let pitch = 0;
+        let yaw = 0;
+
+        // Input Handling
+        const keys = { w: false, a: false, s: false, d: false };
+        document.addEventListener('keydown', (e) => {
+            switch(e.key.toLowerCase()) {
+                case 'w': keys.w = true; break;
+                case 'a': keys.a = true; break;
+                case 's': keys.s = true; break;
+                case 'd': keys.d = true; break;
+                case 'e': interact(); break;
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            switch(e.key.toLowerCase()) {
+                case 'w': keys.w = false; break;
+                case 'a': keys.a = false; break;
+                case 's': keys.s = false; break;
+                case 'd': keys.d = false; break;
+            }
+        });
+
+        // Mouse Look
+        document.body.addEventListener('click', () => {
+            document.body.requestPointerLock();
+        });
+        document.addEventListener('mousemove', (e) => {
+            if (document.pointerLockElement === document.body) {
+                yaw -= e.movementX * 0.002;
+                pitch -= e.movementY * 0.002;
+                pitch = Math.max(-1.5, Math.min(1.5, pitch));
+                camera.rotation.set(pitch, yaw, 0);
+            }
+        });
+
+        // --- 3. Game Logic ---
+
+        function checkCollision(x, z) {
+            const range = PLAYER_RADIUS;
+            for (let cx of [x - range, x + range]) {
+                for (let cz of [z - range, z + range]) {
+                    const gx = Math.round(cx);
+                    const gz = Math.round(cz);
+                    if (gx >= 0 && gx < mapWidth && gz >= 0 && gz < mapHeight) {
+                        const cell = mapData[gz][gx];
+                        // X is wall, + is wall. Others are walkable.
+                        if (cell === 'X' || cell === '+') return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        function interact() {
+            if (highlightedMirror && !gameWon) {
+                // Toggle Type
+                highlightedMirror.type = (highlightedMirror.type === '/') ? '\\' : '/';
+                // Update Visual
+                setMirrorRotation(highlightedMirror.mesh, highlightedMirror.type);
+                // Update Map Data (crucial for laser logic)
+                mapData[highlightedMirror.z][highlightedMirror.x] = highlightedMirror.type;
+                
+                updateLaser();
+            }
+        }
+
+        function updateInteraction() {
+            if (gameWon) return;
+
+            // Find nearest mirror
+            let bestMirror = null;
+            let bestDist = 2.0; // Max distance 2m
+
+            const camPos = camera.position;
+            const camDir = new THREE.Vector3();
+            camera.getWorldDirection(camDir);
+
+            for (let m of mirrors) {
+                // Distance to mirror center
+                // Mirror y is BLOCK_SIZE/2 (0.5), player is 1.7. Ignore Y diff roughly or include it.
+                // Simple Euclidean
+                const dist = Math.sqrt((m.x * BLOCK_SIZE - camPos.x)**2 + (m.z * BLOCK_SIZE - camPos.z)**2);
+                
+                if (dist < bestDist) {
+                    // Check angle (dot product)
+                    const toMirror = new THREE.Vector3(m.x*BLOCK_SIZE - camPos.x, 0, m.z*BLOCK_SIZE - camPos.z).normalize();
+                    const dot = camDir.x * toMirror.x + camDir.z * toMirror.z; // planar dot
+                    
+                    if (dot > 0.7) { // roughly in front
+                        bestDist = dist;
+                        bestMirror = m;
+                    }
+                }
+            }
+
+            if (highlightedMirror !== bestMirror) {
+                if (highlightedMirror) {
+                    highlightedMirror.mesh.children[0].material.emissive.setHex(0x000000); // Unhighlight frame
+                }
+                highlightedMirror = bestMirror;
+                if (highlightedMirror) {
+                    highlightedMirror.mesh.children[0].material.emissive.setHex(0x555555); // Highlight frame
+                }
+            }
+        }
+
+        // --- 4. Laser Logic ---
+
+        function updateLaser() {
+            if (!laserSource) return;
+
+            // Clear old laser
+            if (laserPathLine) {
+                scene.remove(laserPathLine);
+                laserPathLine = null;
+            }
+
+            const points = [];
+            // Start at source center
+            let currX = laserSource.x;
+            let currZ = laserSource.z;
+            
+            points.push(new THREE.Vector3(currX * BLOCK_SIZE, BLOCK_SIZE/2, currZ * BLOCK_SIZE));
+
+            // Determine initial direction
+            // Check neighbors for empty space
+            let dx = 0, dz = 0;
+            const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]]; // N, S, W, E
+            
+            // Prioritize finding a non-wall neighbor
+            for (let d of dirs) {
+                const nx = currX + d[0];
+                const nz = currZ + d[1];
+                if (nx >= 0 && nx < mapWidth && nz >= 0 && nz < mapHeight) {
+                    const c = mapData[nz][nx];
+                    if (c !== 'X' && c !== '+') {
+                        dx = d[0];
+                        dz = d[1];
+                        break;
+                    }
+                }
+            }
+
+            if (dx === 0 && dz === 0) return; // Blocked completely?
+
+            let steps = 0;
+            const maxSteps = 100;
+
+            let hitTarget = false;
+
+            while (steps < maxSteps) {
+                steps++;
+                
+                // Move logic
+                currX += dx;
+                currZ += dz;
+                
+                // Add point
+                points.push(new THREE.Vector3(currX * BLOCK_SIZE, BLOCK_SIZE/2, currZ * BLOCK_SIZE));
+
+                // Check bounds
+                if (currX < 0 || currX >= mapWidth || currZ < 0 || currZ >= mapHeight) break;
+
+                const cell = mapData[currZ][currX];
+
+                if (cell === 'X' || cell === '+') {
+                    // Hit wall - stop (point already added)
+                    break;
+                } else if (cell === '*') {
+                    hitTarget = true;
+                    break;
+                } else if (cell === '/') {
+                    // Reflect /
+                    // If moving Right (1,0) -> Up (0, -1)
+                    // If moving Left (-1,0) -> Down (0, 1)
+                    // If moving Down (0,1) -> Left (-1, 0)
+                    // If moving Up (0,-1) -> Right (1, 0)
+                    // Formula: newDx = -dz, newDz = -dx
+                    const oldDx = dx;
+                    dx = -dz;
+                    dz = -oldDx;
+                } else if (cell === '\\') {
+                    // Reflect \
+                    // Right (1,0) -> Down (0, 1)
+                    // Left (-1,0) -> Up (0, -1)
+                    // Down (0,1) -> Right (1, 0)
+                    // Up (0,-1) -> Left (-1, 0)
+                    // Formula: newDx = dz, newDz = dx
+                    const oldDx = dx;
+                    dx = dz;
+                    dz = oldDx;
+                }
+            }
+
+            // Draw line
+            const geo = new THREE.BufferGeometry().setFromPoints(points);
+            const mat = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 2 });
+            laserPathLine = new THREE.Line(geo, mat);
+            scene.add(laserPathLine);
+
+            if (hitTarget && !gameWon) {
+                gameWon = true;
+                document.getElementById('message').innerText = "YOU WON!";
+                document.getElementById('message').style.display = 'block';
+                document.getElementById('message').style.color = '#0f0';
+            } else if (!hitTarget && gameWon) {
+                // Determine if we lost win condition? 
+                // Usually puzzles stay solved, but let's reset if connection breaks logic
+                gameWon = false;
+                document.getElementById('message').style.display = 'none';
+            }
+        }
+
+        // --- Loop ---
+        const clock = new THREE.Clock();
+        
+        // Initial laser calc
+        updateLaser();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+
+            if (!gameWon) {
+                updateInteraction();
+            }
+
+            // Movement
+            const speed = MOVEMENT_SPEED * delta;
+            // Yaw is Y rotation.
+            // Forward is -Z (local). Rotated by yaw.
+            const dirVec = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
+            const rightVec = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
+            
+            let dx = 0, dz = 0;
+            if (keys.w) { dx += dirVec.x; dz += dirVec.z; }
+            if (keys.s) { dx -= dirVec.x; dz -= dirVec.z; }
+            if (keys.d) { dx += rightVec.x; dz += rightVec.z; }
+            if (keys.a) { dx -= rightVec.x; dz -= rightVec.z; }
+
+            if (dx !== 0 || dz !== 0) {
+                // Simple collision: try X then Z
+                if (!checkCollision(camera.position.x + dx * speed, camera.position.z)) {
+                    camera.position.x += dx * speed;
+                }
+                if (!checkCollision(camera.position.x, camera.position.z + dz * speed)) {
+                    camera.position.z += dz * speed;
+                }
+            }
+
+            renderer.render(scene, camera);
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        animate();
+    </script>
+</body>
+</html>

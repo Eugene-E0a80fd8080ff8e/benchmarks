@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Labyrinth Game</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        canvas { display: block; }
+        #instructions {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-family: Arial, sans-serif;
+            font-size: 24px;
+            text-align: center;
+            pointer-events: none;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 20px;
+            border-radius: 10px;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.js"></script>
+</head>
+<body>
+    <div id="instructions">Click to Play<br>(WASD to Move, Mouse to Look)</div>
+    <script>
+        // Game Constants
+        const BLOCK_SIZE = 1;
+        const PLAYER_HEIGHT = 1.7;
+        const MOVEMENT_SPEED = 5.0;
+        const PLAYER_RADIUS = 0.3; // Collision radius
+
+        // Map Data
+        const mapString = String.raw`XXXXXXXXXXXXXXXX\nX..............X\nX.../.......\..X\nX..............X\nXX......X......X\nX+../...X......X\nXX......X......X\nX..............X\nX......./.../..X\nX..............X\nX..............X\nX...\..\......X\nX..XXXXXXX.....X\nX.s............X\nX..............X\nXXXXXXXXXXXX*XXX`;
+
+        // Parse Map
+        const mapData = mapString.split('\n').map(row => row.split(''));
+        const mapWidth = mapData[0].length;
+        const mapHeight = mapData.length;\n\n        let mirrors = [];\n        let mirrorTypes = new Map();\n        let raycaster = new THREE.Raycaster();\n        let currentMirror = null;\n        let laserMesh = null;\n        let gameSolved = false;\n        let sourceGridX, sourceGridZ;\n        let targetGridX, targetGridZ;\n        let startGridX, startGridZ;
+
+        // Three.js Setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); // Sky blue
+        scene.fog = new THREE.Fog(0x87CEEB, 0, 20);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 10, 7);
+        scene.add(dirLight);
+
+        // Materials
+        const wallMaterial = new THREE.MeshLambertMaterial({ color: 0x888888 }); // Grey walls
+        const floorMaterial = new THREE.MeshLambertMaterial({ color: 0x228B22 }); // Green floor
+        const ceilingMaterial = new THREE.MeshLambertMaterial({ color: 0x333333 }); // Dark ceiling (optional, maybe just sky)
+
+        // Geometry Construction
+        const boxGeometry = new THREE.BoxGeometry(BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE);
+        const floorGeometry = new THREE.PlaneGeometry(mapWidth * BLOCK_SIZE, mapHeight * BLOCK_SIZE);
+
+        // Create Floor
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.set((mapWidth * BLOCK_SIZE) / 2, 0, (mapHeight * BLOCK_SIZE) / 2);
+        scene.add(floor);
+        
+        // Ceiling (optional, helps with "inside" feel, but let's stick to simple sky or maybe a ceiling plane at height 1)
+        // Let's add walls based on map
+        // let startPos = { x: 0, z: 0 };
+
+        for (let z = 0; z < mapHeight; z++) {
+            for (let x = 0; x < mapWidth; x++) {
+                const char = mapData[z][x];
+                const posX = x * BLOCK_SIZE + BLOCK_SIZE / 2;\n                const posZ = z * BLOCK_SIZE + BLOCK_SIZE / 2;
+
+                if (char === 'X') {\n                    const wall = new THREE.Mesh(boxGeometry, wallMaterial);\n                    wall.position.set(posX, BLOCK_SIZE / 2, posZ);\n                    scene.add(wall);\n                } else if (char === 's') {\n                    startGridX = x;\n                    startGridZ = z;\n                } else if (char === '+') {\n                    sourceGridX = x;\n                    sourceGridZ = z;\n                } else if (char === '*') {\n                    const targetGeo = new THREE.SphereGeometry(0.3, 8, 6);\n                    const targetMat = new THREE.MeshLambertMaterial({ color: 0xff0000 });\n                    const targetMesh = new THREE.Mesh(targetGeo, targetMat);\n                    targetMesh.position.set(posX, 0.3, posZ);\n                    scene.add(targetMesh);\n                    targetGridX = x;\n                    targetGridZ = z;\n                } else if (char === '/' || char === '\\') {\n                    const mirrorGeo = new THREE.PlaneGeometry(0.9, 1.0);\n                    const mirrorMat = new THREE.MeshLambertMaterial({ color: 0x808080, side: THREE.DoubleSide });\n                    const mirrorMesh = new THREE.Mesh(mirrorGeo, mirrorMat);\n                    mirrorMesh.position.set(posX, 0.5, posZ);\n                    const rot = (char === '/') ? Math.PI / 4 : -Math.PI / 4;\n                    mirrorMesh.rotation.y = rot;\n                    mirrorMesh.userData.originalColor = mirrorMat.color.clone();\n                    scene.add(mirrorMesh);\n                    const gridX = x;\n                    const gridZ = z;\n                    mirrorTypes.set(\`${gridX},\${gridZ}\`, char);\n                    mirrors.push({ gridX, gridZ, type: char, mesh: mirrorMesh });\n                }
+            }
+        }
+
+        // Initialize Player Position
+        camera.position.set(startGridX + 0.5, PLAYER_HEIGHT, startGridZ + 0.5);
+        // Player rotations (Yaw and Pitch)
+        // We accumulate rotation in these variables to avoid gimbal lock issues with simple Euler addition if not careful,
+        // but applying to a specific rotation order YXZ is usually enough.
+        // Let's use a simpler approach: 
+        // Create a 'pitchObject' (holds camera) and 'yawObject' (handles Y rotation).
+        // Actually, standard FPS: camera parented to nothing, we just control order.
+        camera.rotation.order = 'YXZ'; // Yaw (Y) then Pitch (X)
+
+        let pitch = 0;
+        let yaw = 0;
+
+        // Input State
+        const keys = {
+            forward: false,
+            backward: false,
+            left: false,
+            right: false
+        };
+
+        // Event Listeners
+        const onKeyDown = (event) => {
+            switch (event.code) {
+                case 'KeyW': keys.forward = true; break;
+                case 'KeyA': keys.left = true; break;
+                case 'KeyS': keys.backward = true; break;
+                case 'KeyD': keys.right = true; break;
+            }
+        };
+
+        const onKeyUp = (event) => {
+            switch (event.code) {
+                case 'KeyW': keys.forward = false; break;
+                case 'KeyA': keys.left = false; break;
+                case 'KeyS': keys.backward = false; break;
+                case 'KeyD': keys.right = false; break;
+            }
+        };
+
+        document.addEventListener('keydown', onKeyDown);
+        document.addEventListener('keyup', onKeyUp);
+
+        // Mouse Controls
+        const instructions = document.getElementById('instructions');
+        let isLocked = false;
+
+        document.body.addEventListener('click', () => {
+            if (!isLocked) {
+                document.body.requestPointerLock();
+            }
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            if (document.pointerLockElement === document.body) {
+                isLocked = true;
+                instructions.style.display = 'none';
+            } else {
+                isLocked = false;
+                instructions.style.display = 'block';
+            }
+        });
+
+        document.addEventListener('mousemove', (event) => {
+            if (isLocked) {
+                const movementX = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
+                const movementY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
+
+                yaw -= movementX * 0.002;
+                pitch -= movementY * 0.002;
+
+                // Clamp pitch (look up/down limit) to roughly -90 to 90 degrees
+                pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch));
+
+                camera.rotation.set(pitch, yaw, 0);
+            }
+        });
+
+        // Resize Handler
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Collision Detection
+        function checkCollision(x, z) {
+            // Find map grid coordinates
+            // Add a margin (PLAYER_RADIUS) to check corners of the player's bounding box
+            const checkPoints = [
+                { x: x - PLAYER_RADIUS, z: z - PLAYER_RADIUS },
+                { x: x + PLAYER_RADIUS, z: z - PLAYER_RADIUS },
+                { x: x - PLAYER_RADIUS, z: z + PLAYER_RADIUS },
+                { x: x + PLAYER_RADIUS, z: z + PLAYER_RADIUS }
+            ];
+
+            for (let p of checkPoints) {
+                // Convert world pos to grid pos
+                // Cells are centered at integer coordinates? 
+                // Wait, in construction: wall.position.set(x * SIZE, ...)
+                // So if SIZE=1, wall at x=0 is centered at 0? No.
+                // BoxGeometry(1,1,1) is centered at origin locally.
+                // So if we place at (x*1, ...), it's centered at integer coordinates.
+                // Grid cell (col, row) covers x: [col-0.5, col+0.5], z: [row-0.5, row+0.5]
+                
+                const gridX = Math.floor(p.x);\n                const gridZ = Math.floor(p.z);
+
+                if (gridZ < 0 || gridZ >= mapHeight || gridX < 0 || gridX >= mapWidth) {\n                    return true;\n                }\n                if (mapData[gridZ][gridX] === 'X' || mirrorTypes.has(`${gridX},${gridZ}`)) {\n                    return true;\n                }
+            }
+            return false;\n        }\n\n        function highlightMesh(mesh) {\n          mesh.material.color.setHex(0xffff00);\n        }\n\n        function unhighlightMesh(mesh) {\n          mesh.material.color.copy(mesh.userData.originalColor);\n        }\n\n        function toggleMirror(mesh) {\n          const mir = mirrors.find(m => m.mesh === mesh);\n          if (!mir) return;\n          const newType = mir.type === '/' ? '\\' : '/';\n          mir.type = newType;\n          mirrorTypes.set(\`${mir.gridX},\${mir.gridZ}\`, newType);\n          mesh.rotation.y = newType === '/' ? Math.PI / 4 : -Math.PI / 4;\n          computeLaserPath();\n        }\n\n        function computeLaserPath() {\n          if (typeof sourceGridX === 'undefined') return;\n          const path = [];\n          let cx = sourceGridX;\n          let cz = sourceGridZ;\n          let cdir = 0;\n          path.push(new THREE.Vector3(cx + 0.5, 0.1, cz + 0.5));\n          const dirDeltas = [[1, 0], [0, 1], [-1, 0], [0, -1]];\n          let steps = 0;\n          let solved = false;\n          while (steps < 1000) {\n            const [dx, dz] = dirDeltas[cdir];\n            const nx = cx + dx;\n            const nz = cz + dz;\n            if (nx < 0 || nx >= mapWidth || nz < 0 || nz >= mapHeight || mapData[nz][nx] === 'X') {\n              break;\n            }\n            cx = nx;\n            cz = nz;\n            const center = new THREE.Vector3(cx + 0.5, 0.1, cz + 0.5);\n            path.push(center);\n            if (cx === targetGridX && cz === targetGridZ) {\n              solved = true;\n              break;\n            }\n            const mkey = \`${cx},\${cz}\`;\n            if (mirrorTypes.has(mkey)) {\n              const mtype = mirrorTypes.get(mkey);\n              if (mtype === '/') {\n                if (cdir === 0) cdir = 3;\n                else if (cdir === 3) cdir = 0;\n                else if (cdir === 1) cdir = 2;\n                else if (cdir === 2) cdir = 1;\n              } else {\n                if (cdir === 0) cdir = 1;\n                else if (cdir === 1) cdir = 0;\n                else if (cdir === 2) cdir = 3;\n                else if (cdir === 3) cdir = 2;\n              }\n            }\n            steps++;\n          }\n          if (path.length > 1) {\n            const geometry = new THREE.BufferGeometry().setFromPoints(path);\n            const material = new THREE.LineBasicMaterial({ color: 0xff4400 });\n            if (laserMesh) {\n              scene.remove(laserMesh);\n            }\n            laserMesh = new THREE.Line(geometry, material);\n            scene.add(laserMesh);\n          }\n          if (solved && !gameSolved) {\n            gameSolved = true;\n            const solvedMsg = document.createElement('div');\n            solvedMsg.style.position = 'absolute';\n            solvedMsg.style.top = '50%';\n            solvedMsg.style.left = '50%';\n            solvedMsg.style.transform = 'translate(-50%, -50%)';\n            solvedMsg.style.color = 'white';\n            solvedMsg.style.fontFamily = 'Arial, sans-serif';\n            solvedMsg.style.fontSize = '48px';\n            solvedMsg.style.textAlign = 'center';\n            solvedMsg.style.pointerEvents = 'none';\n            solvedMsg.style.background = 'rgba(0, 0, 0, 0.7)';\n            solvedMsg.style.padding = '20px';\n            solvedMsg.style.borderRadius = '10px';\n            solvedMsg.innerHTML = 'Puzzle Solved!<br>Congratulations!';\n            document.body.appendChild(solvedMsg);\n          }\n        }\n\n        // Game Loop
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (isLocked) {
+                const delta = clock.getDelta();
+                const speed = MOVEMENT_SPEED * delta;
+
+                // Determine movement direction relative to camera yaw
+                // Forward vector on XZ plane
+                const dx = Math.sin(yaw); // -sin for standard math, but let's check. 
+                // In Three.js, camera looks down -Z by default.
+                // Rotation Y+ turns left.
+                // Let's use vectors.
+                
+                const forward = new THREE.Vector3(0, 0, -1).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+                const right = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+
+                let moveX = 0;
+                let moveZ = 0;
+
+                if (keys.forward) {
+                    moveX += forward.x * speed;
+                    moveZ += forward.z * speed;
+                }
+                if (keys.backward) {
+                    moveX -= forward.x * speed;
+                    moveZ -= forward.z * speed;
+                }
+                if (keys.right) {
+                    moveX += right.x * speed;
+                    moveZ += right.z * speed;
+                }
+                if (keys.left) {
+                    moveX -= right.x * speed;
+                    moveZ -= right.z * speed;
+                }
+
+                // Apply movement with collision detection
+                // Try X axis
+                if (!checkCollision(camera.position.x + moveX, camera.position.z)) {
+                    camera.position.x += moveX;
+                }
+                // Try Z axis
+                if (!checkCollision(camera.position.x, camera.position.z + moveZ)) {
+                    camera.position.z += moveZ;
+                }
+                
+                // Simple workaround if sliding against wall is tricky (above splits axes, which allows sliding)
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+    </script>
+</body>
+</html>
